@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="UTF-8">
+	<title>Chordwiki AutoScroller</title>
+	<link rel="stylesheet" href="styles.css">
+	<style>body{min-width:240px;margin:0;padding:0;}</style>
+</head>
+<body class="cw-popup-body">
+	<div class="cw-popup-box">
+		<h2 class="cw-popup-h2">AutoScroller</h2>
+		<div class="cw-popup-row">
+			<span>推定曲時間</span>
+			<strong id="popup-duration">--:--</strong>
+			<span id="popup-source" class="cw-popup-src"></span>
+		</div>
+		<div class="cw-popup-row">
+			<label for="popup-speed">速度</label>
+			<input id="popup-speed" type="range" min="0.5" max="3" step="0.05" value="1">
+			<span id="popup-speed-val">1.00x</span>
+		</div>
+		<div class="cw-popup-row cw-popup-btns">
+			<button type="button" id="popup-start">開始</button>
+			<button type="button" id="popup-stop">停止</button>
+		</div>
+	</div>
+	<script src="popup.js"></script>
+</body>
+</html>
