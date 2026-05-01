@@ -1,7 +1,7 @@
 'use strict';
 
 function formatSource(src) {
-	const m = { itunes: 'iTunes', musicbrainz: 'MusicBrainz', default: '既定', none: '' };
+	const m = { itunes: 'iTunes', musicbrainz: 'MusicBrainz', default: '該当なし', none: '' };
 	return m[src] || '';
 }
 
@@ -48,16 +48,6 @@ document.addEventListener('DOMContentLoaded', () => {
 		const x = typeof v === 'number' && Number.isFinite(v) ? v : parseFloat(spdRange.value);
 		spdVal.textContent = (Number.isFinite(x) ? x : 1).toFixed(2) + 'x';
 	}
-
-	chrome.runtime.sendMessage({ type: 'getOptions' }, (resp) => {
-		const d = resp?.options?.defaultSpeed;
-		if (typeof d === 'number' && Number.isFinite(d)) {
-			spdRange.value = String(clampSpeed(d));
-			showSpeed(d);
-		} else {
-			showSpeed(parseFloat(spdRange.value));
-		}
-	});
 
 	const sessApi = chrome.storage?.session;
 	if (sessApi?.get) {

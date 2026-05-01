@@ -1,28 +1,19 @@
 'use strict';
 
-function clampSpeed(v) {
-	const n = typeof v === 'number' ? v : parseFloat(String(v));
-	if (!Number.isFinite(n)) return 1;
-	return Math.min(3, Math.max(0.25, n));
-}
-
 document.addEventListener('DOMContentLoaded', () => {
 	const form = document.getElementById('options-form');
-	const speedInput = document.getElementById('default-speed');
+	const debugInput = document.getElementById('debug-query-output');
 	const status = document.getElementById('options-status');
 
 	chrome.runtime.sendMessage({ type: 'getOptions' }, (resp) => {
 		if (chrome.runtime.lastError) return;
-		const d = resp?.options?.defaultSpeed;
-		if (typeof d === 'number') {
-			speedInput.value = String(clampSpeed(d));
-		}
+		debugInput.checked = resp?.options?.debugQueryOutput === true;
 	});
 
 	form.addEventListener('submit', (e) => {
 		e.preventDefault();
 		const options = {
-			defaultSpeed: clampSpeed(parseFloat(speedInput.value)),
+			debugQueryOutput: debugInput.checked === true,
 		};
 		chrome.runtime.sendMessage({ type: 'saveOptions', options }, (r) => {
 			if (chrome.runtime.lastError) {

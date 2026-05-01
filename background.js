@@ -7,7 +7,7 @@ const STORAGE_OPTIONS_KEY = 'cw_autoscroller_options';
 const STORAGE_SESSION_SPEED_KEY = 'cw_autoscroller_session_speed';
 
 const DEFAULT_OPTIONS = {
-	defaultSpeed: 1.0,
+	debugQueryOutput: false,
 };
 
 const DEFAULT_DURATION_MS = 240_000;
@@ -23,20 +23,14 @@ const MUSICBRAINZ_USER_AGENT =
 async function getOptions() {
 	const data = await chrome.storage.sync.get(STORAGE_OPTIONS_KEY);
 	const merged = { ...DEFAULT_OPTIONS, ...(data[STORAGE_OPTIONS_KEY] || {}) };
-	if (typeof merged.defaultSpeed !== 'number' || !Number.isFinite(merged.defaultSpeed)) {
-		merged.defaultSpeed = DEFAULT_OPTIONS.defaultSpeed;
-	}
+	merged.debugQueryOutput = merged.debugQueryOutput === true;
 	return merged;
 }
 
 async function saveOptions(options) {
 	const next = {
 		...DEFAULT_OPTIONS,
-		...options,
-		defaultSpeed:
-			typeof options?.defaultSpeed === 'number' && Number.isFinite(options.defaultSpeed)
-				? options.defaultSpeed
-				: DEFAULT_OPTIONS.defaultSpeed,
+		debugQueryOutput: options?.debugQueryOutput === true,
 	};
 	await chrome.storage.sync.set({ [STORAGE_OPTIONS_KEY]: next });
 	return next;
@@ -48,10 +42,7 @@ async function getSessionScrollSpeed() {
 	if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
 		return v;
 	}
-	const opts = await getOptions();
-	return typeof opts.defaultSpeed === 'number' && opts.defaultSpeed > 0
-		? opts.defaultSpeed
-		: 1.0;
+	return 1.0;
 }
 
 async function setSessionScrollSpeed(value) {
@@ -97,13 +88,14 @@ function escapeMusicBrainzQueryTerm(raw) {
 	return s.trim();
 }
 
-async function fetchDurationFromItunes(title, artist) {
+async function fetchDurationFromItunes(title, artist, reportDebugUrl) {
 	const q = sanitizeSearchPart(`${title} ${artist}`);
 	if (!q) {
 		return null;
 	}
 
 	const url = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=5`;
+	reportDebugUrl?.('itunes', url);
 
 	try {
 		const resp = await fetch(url);
@@ -122,7 +114,7 @@ async function fetchDurationFromItunes(title, artist) {
 	return null;
 }
 
-async function fetchDurationFromMusicBrainz(title, artist) {
+async function fetchDurationFromMusicBrainz(title, artist, reportDebugUrl) {
 	const t = sanitizeSearchPart(title);
 	const a = sanitizeSearchPart(artist);
 	if (!t || !a) {
@@ -131,6 +123,7 @@ async function fetchDurationFromMusicBrainz(title, artist) {
 
 	const q = `recording:"${escapeMusicBrainzQueryTerm(t)}" AND artist:"${escapeMusicBrainzQueryTerm(a)}"`;
 	const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(q)}&fmt=json&limit=5`;
+	reportDebugUrl?.('musicbrainz', url);
 
 	try {
 		const resp = await fetch(url, {
@@ -154,18 +147,35 @@ async function fetchDurationFromMusicBrainz(title, artist) {
 	return null;
 }
 
-async function resolveDuration(title, artist) {
-	let result = await fetchDurationFromItunes(title, artist);
+async function resolveDuration(title, artist, reportDebugUrl) {
+	let result = await fetchDurationFromItunes(title, artist, reportDebugUrl);
 	if (!result) {
-		result = await fetchDurationFromMusicBrainz(title, artist);
+		result = await fetchDurationFromMusicBrainz(title, artist, reportDebugUrl);
 	}
 	if (!result) {
-		return { duration: DEFAULT_DURATION_MS, source: 'default' };
+		return { duration: DEFAULT_DURATION_MS, source: 'default', unavailable: true };
 	}
-	return result;
+	return { ...result, unavailable: false };
 }
 
-function handleGetDuration(message, sendResponse) {
+function reportDebugDurationQuery({ provider, url, sender, enabled }) {
+	if (!enabled || !url) {
+		return;
+	}
+
+	console.info(`[duration-debug][${provider}] ${url}`);
+
+	const tabId = sender?.tab?.id;
+	if (typeof tabId !== 'number') {
+		return;
+	}
+
+	chrome.tabs.sendMessage(tabId, { type: 'durationDebugUrl', provider, url }, () => {
+		void chrome.runtime.lastError;
+	});
+}
+
+function handleGetDuration(message, sender, sendResponse) {
 	const title = sanitizeSearchPart(message?.title);
 	const artist = sanitizeSearchPart(message?.artist);
 
@@ -174,11 +184,21 @@ function handleGetDuration(message, sendResponse) {
 			type: 'durationResult',
 			duration: DEFAULT_DURATION_MS,
 			source: 'default',
+			unavailable: true,
 		});
 		return;
 	}
 
-	resolveDuration(title, artist)
+	getOptions()
+		.catch(() => DEFAULT_OPTIONS)
+		.then((options) => {
+			const debugEnabled = options?.debugQueryOutput === true;
+			const reportDebugUrl = (provider, url) => {
+				reportDebugDurationQuery({ provider, url, sender, enabled: debugEnabled });
+			};
+
+			return resolveDuration(title, artist, reportDebugUrl);
+		})
 		.then((payload) => {
 			sendResponse({ type: 'durationResult', ...payload });
 		})
@@ -187,6 +207,7 @@ function handleGetDuration(message, sendResponse) {
 				type: 'durationResult',
 				duration: DEFAULT_DURATION_MS,
 				source: 'default',
+				unavailable: true,
 			});
 		});
 }
@@ -202,6 +223,25 @@ function isChordwikiUrl(url) {
 	try {
 		const u = new URL(url);
 		return u.hostname === 'chordwiki.org' || u.hostname === 'ja.chordwiki.org';
+	} catch {
+		return false;
+	}
+}
+
+function isChordwikiSongPageUrl(url) {
+	if (!isChordwikiUrl(url)) {
+		return false;
+	}
+
+	try {
+		const u = new URL(url);
+		if (u.pathname === '/' || u.pathname === '') {
+			return false;
+		}
+		if (u.pathname.startsWith('/ranking') || u.pathname.startsWith('/search')) {
+			return false;
+		}
+		return true;
 	} catch {
 		return false;
 	}
@@ -254,18 +294,32 @@ async function relayAdjustSpeed(value) {
 	}
 }
 
+async function toggleUiOnActiveSongTab() {
+	const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+	const tab = tabs[0];
+	if (tab?.id == null || !isChordwikiSongPageUrl(tab.url)) {
+		return;
+	}
+
+	try {
+		await chrome.tabs.sendMessage(tab.id, { type: 'toggleUiVisibility' });
+	} catch {
+		// ignore: no receiver or page not ready
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Message router
 // -----------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	if (!message || typeof message !== 'object') {
 		return false;
 	}
 
 	switch (message.type) {
 		case 'getDuration':
-			handleGetDuration(message, sendResponse);
+			handleGetDuration(message, sender, sendResponse);
 			return true;
 
 		case 'saveOptions':
@@ -303,4 +357,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 		default:
 			return false;
 	}
+});
+
+chrome.action.onClicked.addListener(() => {
+	toggleUiOnActiveSongTab().catch(() => {
+		// ignore
+	});
 });

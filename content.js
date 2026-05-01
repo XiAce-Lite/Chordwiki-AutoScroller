@@ -2,14 +2,18 @@
 
 const DEFAULT_DURATION_MS = 240000;
 const STORAGE_NS = 'cw_as_v10';
+const STORAGE_UI_VISIBLE_KEY = 'cw_ui_visible';
 const MAX_MINUTES = 99;
 const SP_MIN = 0.5;
 const SP_MAX = 3;
 const FOCUS_RATIO = 0.42;
+const VARIABLE_FOCUS_RATIO_START = 0.2;
+const VARIABLE_FOCUS_RATIO_FINAL = 0.4;
+const VARIABLE_LEAD_IN_MS = 1000;
+const MANUAL_INTERACTION_HOLD_MS = 260;
 const EDGE = 34;
 const EDGE_BASE = 200;
 const EDGE_MAX = 720;
-const WHEEL_PX_THRESHOLD = 72;
 const SPEED_NUDGE = 0.05;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
@@ -27,24 +31,121 @@ function fmtDur(ms0) {
 	const sec = s % 60;
 	return m + ':' + pad2(sec);
 }
+
+function fmtSpeed(spd0) {
+	const spd = clamp(Number(spd0) || 1, SP_MIN, SP_MAX);
+	return spd.toFixed(2) + 'x';
+}
 function stripTitle(txt) {
 	const t = String(txt || '').trim().replace(/^[ 　]+|[ 　]+$/g, '');
 	if (!t) return '';
 	return t.replace(/[（(].*$/, '').trim();
 }
-function extractSongTitle() {
-	const m = /\{\s*(title|t)\s*:\s*([^\}\n]+)\}/i.exec(document.body.innerText || '');
-	return m ? stripTitle(m[2]) : null;
+
+function normalizeMetaText(txt) {
+	return String(txt || '')
+		.replace(/[\t\r\n]+/g, ' ')
+		.replace(/[ ]{2,}/g, ' ')
+		.replace(/\u3000{2,}/g, '　')
+		.trim();
 }
+
+function getSongTitleSourceText() {
+	const titleEl = document.querySelector('h1.title');
+	if (titleEl?.textContent) {
+		return normalizeMetaText(titleEl.textContent);
+	}
+
+	const fallback = /\{\s*(title|t)\s*:\s*([^\}\n]+)\}/i.exec(document.body.innerText || '');
+	return fallback ? normalizeMetaText(fallback[2]) : '';
+}
+
+function getSongSubtitleSourceText() {
+	const subtitleEl = document.querySelector('h2.subtitle');
+	if (subtitleEl?.textContent) {
+		return normalizeMetaText(subtitleEl.textContent);
+	}
+
+	const fallback = /\{\s*(subtitle|st)\s*:\s*([^\}\n]+)\}/i.exec(document.body.innerText || '');
+	return fallback ? normalizeMetaText(fallback[2]) : '';
+}
+
+function extractSongTitle() {
+	const source = getSongTitleSourceText();
+	if (!source) {
+		return null;
+	}
+
+	const stripped = stripTitle(source);
+	return stripped || null;
+}
+
+function trimArtistBoundaryText(value) {
+	return String(value || '')
+		.replace(/^[\s\u3000:：・]+/, '')
+		.replace(/[\s\u3000]+$/, '')
+		.trim();
+}
+
+function findArtistStartIndex(subtitle) {
+	const patterns = [
+		/歌[：:]/,
+		/歌・(?:作詞・作曲|作詞|作曲|編曲)[：:]/,
+		/歌・/
+	];
+
+	for (const pattern of patterns) {
+		const match = pattern.exec(subtitle);
+		if (match && typeof match.index === 'number') {
+			return match.index + match[0].length;
+		}
+	}
+
+	return 0;
+}
+
+function findArtistEndIndex(subtitle, startIndex) {
+	const roleKanji = '(?:作詞|作曲|編曲|補作詞|訳詞)';
+	const roleAlpha = '(?:Words|Music|Arranged|Produced)';
+	const compoundKanji = `${roleKanji}(?:・${roleKanji})*`;
+	const rolePattern = new RegExp(
+		`(?:^|[\\s\\u3000])(?:${compoundKanji}|${roleAlpha})\\s*[：:]`,
+		'i'
+	);
+	const target = subtitle.slice(Math.max(0, startIndex));
+	const match = rolePattern.exec(target);
+	if (!match || typeof match.index !== 'number') {
+		return subtitle.length;
+	}
+
+	return startIndex + match.index;
+}
+
 function extractSongArtist() {
-	const m = /\{\s*(subtitle|st)\s*:\s*([^\}\n]+)\}/i.exec(document.body.innerText || '');
-	if (!m) return null;
-	let s = String(m[2]).trim();
-	const k = s.search(/歌[:・]/);
-	let rest = k >= 0 ? s.slice(k + 2) : s;
-	const cut = rest.search(/作詞|作曲|編曲|歌[:・]|[ 　]/);
-	if (cut >= 0) rest = rest.slice(0, cut);
-	return rest.trim();
+	const subtitle = getSongSubtitleSourceText();
+	if (!subtitle) return null;
+
+	const startIndex = findArtistStartIndex(subtitle);
+	const endIndex = findArtistEndIndex(subtitle, startIndex);
+	const candidate = trimArtistBoundaryText(subtitle.slice(startIndex, endIndex));
+	return candidate || null;
+}
+function isLikelySongPage() {
+	if (!/^(?:www\.)?(?:ja\.)?chordwiki\.org$/i.test(window.location.hostname)) {
+		return false;
+	}
+
+	if (window.location.pathname === '/' || window.location.pathname === '') {
+		return false;
+	}
+
+	const bodyText = document.body?.innerText || '';
+	if (document.querySelector('h1.title') || /\{\s*(title|t)\s*:/i.test(bodyText)) {
+		return true;
+	}
+
+	const lineCount = document.querySelectorAll('p.line, .comment, p[class*="line"]').length;
+	return lineCount >= 2;
 }
 function getSheetEl() {
 	return (
@@ -90,7 +191,41 @@ const SC = /** @type {Record<string, any>} */ ({
 	mLay: null,
 	mStart: null,
 	mEnd: null,
+	uiRoot: null,
+	sheetEl: null,
+	isSongPage: false,
+	uiVisible: true,
+	rewindPending: false,
+	userScrollOverrideUntilMs: 0,
+	hasScrollStarted: false,
+	phase: 'main',
+	phaseElapsedMs: 0,
+	focusRatioCurrent: VARIABLE_FOCUS_RATIO_FINAL,
+	playStartScrollY: 0,
+	virtualScrollY: 0,
+	debugQueryOutput: false,
+	debugUrlEl: null,
+	queryTitle: '',
+	queryArtist: '',
+	queryPairEl: null,
 });
+
+function loadUiVisibleState() {
+	try {
+		return localStorage.getItem(STORAGE_UI_VISIBLE_KEY) === '1';
+	} catch (e) {
+		void e;
+		return false;
+	}
+}
+
+function saveUiVisibleState(visible) {
+	try {
+		localStorage.setItem(STORAGE_UI_VISIBLE_KEY, visible ? '1' : '0');
+	} catch (e) {
+		void e;
+	}
+}
 
 function applyDefaults() {
 	const sh = getSheetEl();
@@ -181,46 +316,79 @@ function restoreState() {
 	}
 }
 
-function lyricLenGuess(el) {
-	const inner = String(el.innerText || '').replace(/\s+/g, '');
-	return clamp(inner.length || 1, 1, 5000);
+const VAR_WEIGHT_FLOOR = 0.12;
+const VAR_COMMENT_WEIGHT = 0.22;
+
+function lyricLenFromEl(el) {
+	if (!(el instanceof Element)) return 0;
+	// p.comment は歌詞長なし
+	if (el.matches('p.comment')) return 0;
+	// chord span を除いたテキストのみ集計（参考実装と同方式）
+	let total = 0;
+	el.querySelectorAll('span:not(.chord)').forEach((node) => {
+		total += String(node.textContent || '').replace(/\s+/g, ' ').trim().length;
+	});
+	// span 構造がない場合（fallback）
+	if (total === 0) {
+		total = String(el.innerText || '').replace(/\s+/g, '').length;
+	}
+	return total;
 }
 
-/** @returns {null | {cumMs:number[], y:number[]}} */
+function normalizeVarWeights(rawWeights) {
+	if (!rawWeights.length) return [];
+	const min = Math.min(...rawWeights);
+	const max = Math.max(...rawWeights);
+	if (!Number.isFinite(min) || !Number.isFinite(max) || Math.abs(max - min) < 0.0001) {
+		return rawWeights.map(() => Math.max(VAR_WEIGHT_FLOOR, 1));
+	}
+	return rawWeights.map((v) => {
+		const n = clamp((v - min) / (max - min), 0, 1);
+		return VAR_WEIGHT_FLOOR + n * (1 - VAR_WEIGHT_FLOOR);
+	});
+}
+
+/** @returns {null | {cumMs:number[], ytab:number[]}} */
 function buildVarCurve() {
 	const sh = getSheetEl();
-	const lines = [];
+	const entries = [];
 	for (const el of sheetLines(sh)) {
 		const r = el.getBoundingClientRect();
-		const y = (r.top + r.bottom) / 2 + window.scrollY;
-		if (y < SC.sx - 14 || y > SC.ex + 14) {
-			continue;
-		}
-		lines.push({ y: y, lz: lyricLenGuess(el), h: Math.max(r.height || 14, 1) });
+		const centerY = (r.top + r.bottom) / 2 + window.scrollY;
+		if (centerY < SC.sx - 14 || centerY > SC.ex + 14) continue;
+		const isComment = el.matches('p.comment');
+		entries.push({
+			y: centerY,
+			lz: isComment ? 0 : lyricLenFromEl(el),
+			h: Math.max(r.height || 14, 1),
+			isComment,
+		});
 	}
-	if (lines.length < 2) {
-		return null;
-	}
-	let wgt = [];
-	for (let i = 0; i < lines.length - 1; i++) {
-		let w = Math.sqrt(lines[i].lz / 40 + 1) + lines[i].h / 32;
-		w = clamp(w, 0.12, 8);
-		wgt.push(w);
-	}
-	const sum = wgt.reduce(function (x, q) {
-		return x + q;
-	}, 0);
+	if (entries.length < 2) return null;
+
+	// 各エントリのrawウェイト計算
+	const lyricRaw = entries.map((e) => e.lz);
+	const heightRaw = entries.map((e) => e.h);
+	const lyricN = normalizeVarWeights(lyricRaw);
+	const heightN = normalizeVarWeights(heightRaw);
+
+	const rawWeights = entries.map((e, i) => {
+		if (e.isComment) return VAR_COMMENT_WEIGHT;
+		return lyricN[i] * 0.65 + heightN[i] * 0.35;
+	});
+	const finalWeights = normalizeVarWeights(rawWeights);
+
+	// セグメント間のウェイトでタイムライン構築（参考実装と同方式）
+	const segWeights = finalWeights.slice(0, -1);
+	const sum = Math.max(1e-6, segWeights.reduce((a, b) => a + b, 0));
 	const cumMs = [0];
-	const ytab = [];
-	for (let i = 0; i < lines.length; i++) {
-		ytab.push(lines[i].y);
-	}
+	const ytab = entries.map((e) => e.y);
 	let acc = 0;
-	for (let i = 0; i < wgt.length; i++) {
-		acc += (wgt[i] / Math.max(sum, 1e-6)) * SC.ms;
+	for (let i = 0; i < segWeights.length; i++) {
+		acc += (segWeights[i] / sum) * SC.ms;
 		cumMs.push(acc);
 	}
-	return { cumMs: cumMs, ytab: ytab };
+	return { cumMs, ytab };
 }
 
 function interpVar(curve, elapsedMs0) {
@@ -235,33 +403,85 @@ function interpVar(curve, elapsedMs0) {
 	const t0 = cum[k];
 	const t1 = cum[k + 1] || cum[k];
 	const r = Math.abs(t1 - t0) < 1e-9 ? 0 : clamp((e - t0) / (t1 - t0), 0, 1);
-	return y[k] + (y[k + 1] - y[k]) * r;
+	const nextY = k + 1 < y.length ? y[k + 1] : y[k];
+	return y[k] + (nextY - y[k]) * r;
+}
+
+function interpVarElapsed(curve, focusY0) {
+	const cum = curve?.cumMs;
+	const y = curve?.ytab;
+	if (!Array.isArray(cum) || !Array.isArray(y) || y.length < 2 || cum.length < 2) {
+		return 0;
+	}
+
+	const focusY = Number(focusY0) || 0;
+	let bestMs = 0;
+	let bestDist = Number.POSITIVE_INFINITY;
+
+	for (let i = 0; i < y.length - 1; i += 1) {
+		const y0 = Number(y[i]) || 0;
+		const y1 = Number(y[i + 1]) || y0;
+		const t0 = Number(cum[i]) || 0;
+		const t1 = Number(cum[i + 1]) || t0;
+
+		let ratio = 0;
+		if (Math.abs(y1 - y0) > 0.0001) {
+			ratio = clamp((focusY - y0) / (y1 - y0), 0, 1);
+		}
+
+		const projectedY = y0 + ((y1 - y0) * ratio);
+		const dist = Math.abs(projectedY - focusY);
+		const candidateMs = t0 + ((t1 - t0) * ratio);
+
+		if (dist < bestDist) {
+			bestDist = dist;
+			bestMs = candidateMs;
+		}
+	}
+
+	return clamp(bestMs, 0, Math.max(0, SC.ms));
 }
 
 function refreshVarCurve() {
 	SC.varCurve = SC.variable ? buildVarCurve() : null;
 }
 
-function scrollToProg(u) {
+function scrollToProg(u, focusRatio) {
 	const u2 = clamp(u, 0, 1);
+	let targetY;
 	if (SC.variable && SC.varCurve) {
 		const fy = interpVar(SC.varCurve, u2 * SC.ms);
-		window.scrollTo(0, clamp(fy - window.innerHeight * FOCUS_RATIO, 0, vmax()));
-		return;
+		const ratio = clamp(
+			typeof focusRatio === 'number' ? focusRatio : VARIABLE_FOCUS_RATIO_FINAL,
+			0,
+			1
+		);
+		targetY = clamp(fy - window.innerHeight * ratio, 0, vmax());
+	} else {
+		const a = yScrollStartFocus();
+		const b = yScrollEndStop();
+		targetY = clamp(a + (b - a) * u2, 0, vmax());
 	}
-	const a = yScrollStartFocus();
-	const b = yScrollEndStop();
-	const pos = clamp(a + (b - a) * u2, 0, vmax());
-	window.scrollTo(0, pos);
+	window.scrollTo({ top: targetY, behavior: 'instant' });
+	SC.virtualScrollY = targetY;
 }
 
-function stopPlay(msg) {
+function stopPlay(msg, options) {
+	const reachedEnd = options?.reachedEnd === true;
 	if (SC.frame) {
 		cancelAnimationFrame(SC.frame);
 		SC.frame = null;
 	}
 	SC.playing = false;
 	SC.elapsed = 0;
+	SC.tPrev = 0;
+	SC.hasScrollStarted = false;
+	SC.phase = 'main';
+	SC.phaseElapsedMs = 0;
+	SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
+	SC.userScrollOverrideUntilMs = 0;
+	SC.virtualScrollY = 0;
+	SC.rewindPending = reachedEnd;
 	if (typeof msg === 'string' && SC.statusEl) {
 		SC.statusEl.textContent = msg;
 		SC.statusEl.dataset.tone = 'info';
@@ -288,23 +508,55 @@ function frame(nowMs) {
 	if (!SC.tPrev) {
 		SC.tPrev = nowMs;
 	}
-	let dtMs = clamp(nowMs - SC.tPrev, 0, 120);
+
+	const dtMs = clamp(nowMs - SC.tPrev, 0, 120);
 	SC.tPrev = nowMs;
-	SC.elapsed += dtMs * clamp(SC.spd || 1, SP_MIN, SP_MAX);
-	let u = SC.elapsed / SC.ms;
-	if (u >= 1) {
-		stopPlay(SC.statusEl ? '終了しました' : null);
-		scrollToProg(1);
+
+	if (nowMs < (SC.userScrollOverrideUntilMs || 0)) {
+		SC.virtualScrollY = window.scrollY;
+		updatePlayingStatusText();
+		if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
+		SC.frame = requestAnimationFrame(frame);
 		return;
 	}
-	scrollToProg(u);
+	const speedFactor = clamp(SC.spd || 1, SP_MIN, SP_MAX);
+	SC.elapsed = Math.min(SC.ms, SC.elapsed + dtMs * speedFactor);
+
+	if (SC.elapsed >= SC.ms) {
+		stopPlay(SC.statusEl ? '終了しました。クリックで先頭へ戻ります。' : null, { reachedEnd: true });
+		scrollToProg(1, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
+		return;
+	}
+
+	// ── lead-in フェーズ（可変モード専用）───────────────────────────────
+	// C案: elapsed に対応するスクロール位置が初期位置を超えた瞬間に本編へ移行。
+	// それまでは画面を動かさず「遅延開始中」を表示し続ける。
+	if (SC.variable && SC.phase === 'lead-in') {
+		const focusY = SC.varCurve ? interpVar(SC.varCurve, SC.elapsed) : SC.sx;
+		const targetY = clamp(focusY - window.innerHeight * VARIABLE_FOCUS_RATIO_FINAL, 0, vmax());
+		if (targetY > SC.playStartScrollY + 2) {
+			// スクロールが必要な行に到達 → 本編へ移行（fall through）
+			SC.phase = 'main';
+			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
+		} else {
+			// まだ初期表示範囲内 → スクロールなし
+			updatePlayingStatusText();
+			if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
+			SC.frame = requestAnimationFrame(frame);
+			return;
+		}
+	}
+	// ─────────────────────────────────────────────────────────────────────
+
+	if (!SC.hasScrollStarted) SC.hasScrollStarted = true;
+	const u = SC.elapsed / SC.ms;
+	scrollToProg(u, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
+	updatePlayingStatusText();
 	SC.frame = requestAnimationFrame(frame);
 	if (SC.elapsed > 450 && visibleEndEnough()) {
-		stopPlay('エンドまで到達');
+		stopPlay('エンドまで到達しました。クリックで先頭へ戻ります。', { reachedEnd: true });
 	}
-	if (SC.remainEl && SC.remainEl.textContent !== undefined) {
-		SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
-	}
+	if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 }
 
 function setStatus(text, tone) {
@@ -382,7 +634,7 @@ function runMarkerEdgeTick() {
 	const prevY = window.scrollY;
 	const ny = clamp(prevY + vx * dt, 0, vmax());
 	if (Math.abs(ny - prevY) > 0.5) {
-		window.scrollTo(0, ny);
+		window.scrollTo({ top: ny, behavior: 'instant' });
 	}
 	const docY = d.clientY + window.scrollY - d.off;
 	setMarkerXY(d.which, docY, false);
@@ -472,8 +724,89 @@ function syncDurationInputs() {
 }
 
 function sourceLabel(s) {
-	const map = { itunes: 'iTunes', musicbrainz: 'MusicBrainz', default: '既定', none: '' };
+	const map = { itunes: 'iTunes', musicbrainz: 'MusicBrainz', default: '該当なし', none: '' };
 	return map[s] || '';
+}
+
+function getVariableFocusRatio(elapsedMs) {
+	if (!SC.hasScrollStarted) {
+		return VARIABLE_FOCUS_RATIO_START;
+	}
+	const progress = clamp((Number(elapsedMs) || 0) / VARIABLE_LEAD_IN_MS, 0, 1);
+	return VARIABLE_FOCUS_RATIO_START + ((VARIABLE_FOCUS_RATIO_FINAL - VARIABLE_FOCUS_RATIO_START) * progress);
+}
+
+function updatePlayingStatusText() {
+	if (!SC.playing) {
+		return;
+	}
+
+	const remainingMs = Math.max(0, SC.ms - SC.elapsed);
+	const baseMessage = `${fmtDur(remainingMs)} · ${fmtSpeed(SC.spd)}`;
+	if (SC.variable && SC.phase === 'lead-in') {
+		setStatus(`Playing · 遅延開始中 · ${baseMessage}`, 'lead-in');
+		return;
+	}
+
+	setStatus(`Playing · ${baseMessage}`, 'info');
+}
+
+function setDebugQueryOutputEnabled(enabled) {
+	SC.debugQueryOutput = enabled === true;
+	if (!SC.debugQueryOutput && SC.debugUrlEl) {
+		SC.debugUrlEl.hidden = true;
+		SC.debugUrlEl.textContent = '';
+	}
+}
+
+function showDurationDebugUrl(provider, url) {
+	if (!SC.debugQueryOutput || !SC.debugUrlEl) {
+		return;
+	}
+
+	SC.debugUrlEl.hidden = false;
+	SC.debugUrlEl.textContent = `Debug ${String(provider || '').toUpperCase()} URL: ${String(url || '')}`;
+}
+
+function updateQueryPairDisplay() {
+	if (!SC.queryPairEl) {
+		return;
+	}
+
+	const title = String(SC.queryTitle || '').trim();
+	const artist = String(SC.queryArtist || '').trim();
+	SC.queryPairEl.textContent = `${title}:${artist}`;
+}
+
+function elapsedFromScrollY(scrollY) {
+	const y = Number.isFinite(scrollY) ? scrollY : window.scrollY;
+
+	if (SC.variable && SC.varCurve) {
+		const focusY = y + (window.innerHeight * VARIABLE_FOCUS_RATIO_FINAL);
+		return clamp(interpVarElapsed(SC.varCurve, focusY), 0, SC.ms);
+	}
+
+	const startY = yScrollStartFocus();
+	const endY = yScrollEndStop();
+	const range = Math.max(1, endY - startY);
+	const ratio = clamp((y - startY) / range, 0, 1);
+	return clamp(ratio * SC.ms, 0, SC.ms);
+}
+
+function syncPlaybackFromScrollY(scrollY) {
+	if (!SC.playing) {
+		return;
+	}
+
+	const y = Number.isFinite(scrollY) ? scrollY : window.scrollY;
+	const nextElapsedMs = elapsedFromScrollY(y);
+	const nowMs = performance.now();
+	SC.elapsed = nextElapsedMs;
+	SC.tPrev = nowMs;
+	SC.virtualScrollY = y;
+	SC.hasScrollStarted = true;
+	SC.phase = 'main';
+	updatePlayingStatusText();
 }
 
 function applyDurationFromInputs(notify) {
@@ -521,15 +854,50 @@ function startPlay() {
 		setStatus('曲時間が短すぎます', 'warn');
 		return;
 	}
+
+	const startScrollY = yScrollStartFocus();
+	const isNearStart = Math.abs(window.scrollY - startScrollY) <= 30;
+	const shouldStartFromMarker = SC.rewindPending || isNearStart;
+
 	SC.playing = true;
-	SC.elapsed = 0;
 	SC.tPrev = 0;
+	SC.hasScrollStarted = false;
+	SC.userScrollOverrideUntilMs = 0;
+
+	if (shouldStartFromMarker) {
+		SC.elapsed = 0;
+		if (SC.variable && SC.varCurve) {
+			// lead-in: 先頭歌詞を FOCUS_RATIO_FINAL の位置に表示して固定
+			const startFocusY = interpVar(SC.varCurve, 0);
+			const leadInStartY = clamp(startFocusY - window.innerHeight * VARIABLE_FOCUS_RATIO_FINAL, 0, vmax());
+			window.scrollTo({ top: leadInStartY, behavior: 'instant' });
+			SC.virtualScrollY = leadInStartY;
+			SC.playStartScrollY = leadInStartY;
+			SC.phase = 'lead-in';
+			SC.phaseElapsedMs = 0;
+			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
+		} else {
+			SC.phase = 'main';
+			SC.phaseElapsedMs = 0;
+			SC.focusRatioCurrent = FOCUS_RATIO;
+			scrollToProg(0, FOCUS_RATIO);
+			SC.playStartScrollY = SC.virtualScrollY;
+		}
+	} else {
+		SC.phase = 'main';
+		SC.phaseElapsedMs = 0;
+		SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
+		SC.hasScrollStarted = true;
+		SC.playStartScrollY = window.scrollY;
+		SC.virtualScrollY = window.scrollY;
+		syncPlaybackFromScrollY(window.scrollY);
+	}
+
 	if (SC.btnPlay) {
 		SC.btnPlay.textContent = '停止';
 		SC.btnPlay.classList.toggle('cw-playing', true);
 	}
-	setStatus('再生中', 'lead-in');
-	scrollToProg(0);
+	updatePlayingStatusText();
 	SC.frame = requestAnimationFrame(frame);
 	saveState();
 }
@@ -538,8 +906,55 @@ function togglePlay() {
 	if (SC.playing) {
 		stopPlay('停止しました');
 	} else {
+		SC.rewindPending = false;
 		startPlay();
 	}
+}
+
+function scrollBackToStartByClick() {
+	scrollToProg(0);
+	SC.rewindPending = false;
+	setStatus('先頭へ戻りました。もう一度クリックで開始します。', 'warn');
+}
+
+function handlePrimarySheetClick(ev) {
+	if (ev.defaultPrevented || ev.button !== 0) return;
+	if (!(ev.target instanceof Element)) return;
+
+	if (ev.target.closest('#cw-autoscroll-root, #cw-autoscroll-marker-layer, a, button, input, select, textarea, label')) {
+		return;
+	}
+
+	if (SC.drag) {
+		return;
+	}
+
+	if (!SC.playing && SC.rewindPending) {
+		scrollBackToStartByClick();
+		return;
+	}
+
+	togglePlay();
+}
+
+function setUiVisibility(visible) {
+	SC.uiVisible = visible !== false;
+	if (SC.uiRoot) {
+		SC.uiRoot.style.display = SC.uiVisible ? '' : 'none';
+	}
+	if (SC.mLay) {
+		SC.mLay.style.display = SC.uiVisible ? '' : 'none';
+	}
+	saveUiVisibleState(SC.uiVisible);
+}
+
+function toggleUiVisibility() {
+	const nextVisible = !SC.uiVisible;
+	if (!nextVisible && SC.playing) {
+		stopPlay('UIを閉じたため停止しました');
+	}
+	setUiVisibility(nextVisible);
+	return nextVisible;
 }
 
 function wireMarkerLayer(layer) {
@@ -599,14 +1014,15 @@ function mountUi() {
 		'<button type="button" id="cw-spd-up">＋</button>' +
 		'<button type="button" id="cw-spd-reset" class="cw-inline-reset">↺ Speed</button>' +
 		'</div>' +
-		'<div class="cw-speed-hint">再生中はホイール ↑ で遅く / ↓ で速く</div>' +
+		'<div class="cw-speed-hint">再生中のホイール操作でスピードを変更します</div>' +
 		'<div class="cw-actions">' +
 		'<button type="button" id="cw-play">開始</button>' +
 		'<button type="button" id="cw-reset-markers">↺ Marker</button>' +
 		'<label class="cw-var-toggle"><input type="checkbox" id="cw-variable" checked /><span>可変スクロール</span></label>' +
 		'</div>' +
-		'<div class="cw-est-row">推定時間 <span id="cw-est-dur">--:--</span> <span id="cw-src" class="cw-src"></span></div>' +
+		'<div class="cw-est-row">推定時間 <span id="cw-est-dur">--:--</span> <span id="cw-src" class="cw-src"></span> <span id="cw-query-pair" class="cw-query-pair">:</span></div>' +
 		'<div class="cw-remain-row">残り時間 <span id="cw-remain">--:--</span></div>' +
+		'<div id="cw-debug-url" class="cw-debug-url" hidden></div>' +
 		'<div class="cw-est-note">スライダーはページ・ポップアップ共通で速度を変更します</div>' +
 		'</div>';
 
@@ -625,6 +1041,10 @@ function mountUi() {
 	SC.speedLabelEl = root.querySelector('#cw-spd-lbl');
 	SC.speedResetBtn = root.querySelector('#cw-spd-reset');
 	SC.remainEl = root.querySelector('#cw-remain');
+	SC.queryPairEl = root.querySelector('#cw-query-pair');
+	SC.debugUrlEl = root.querySelector('#cw-debug-url');
+	SC.uiRoot = root;
+	updateQueryPairDisplay();
 
 	root.querySelector('#cw-collapse').addEventListener('click', () => {
 		root.classList.toggle('cw-collapsed');
@@ -686,17 +1106,30 @@ function mountUi() {
 		setStatus(SC.variable ? '可変スクロール ON' : '等速モード', 'info');
 	});
 
-	window.addEventListener('scroll', placeMarkers, { passive: true });
+	window.addEventListener('scroll', () => {
+		placeMarkers();
+		if (
+			SC.playing
+			&& Math.abs(window.scrollY - (SC.virtualScrollY || 0)) > 3
+		) {
+			syncPlaybackFromScrollY(window.scrollY);
+			SC.userScrollOverrideUntilMs = performance.now() + MANUAL_INTERACTION_HOLD_MS;
+		}
+	}, { passive: true });
 	window.addEventListener('resize', onResizeLayout);
+	SC.sheetEl = getSheetEl();
+	if (SC.sheetEl) {
+		SC.sheetEl.addEventListener('click', handlePrimarySheetClick);
+	}
 
 	window.addEventListener(
 		'wheel',
 		(ev) => {
-			if (!SC.playing || ev.ctrlKey || ev.metaKey) return;
+			if (!SC.playing || ev.defaultPrevented || ev.ctrlKey || ev.metaKey) return;
 			const dy = Number(ev.deltaY) || 0;
 			if (Math.abs(dy) < 4) return;
-			const steps = clamp(Math.round(Math.abs(dy) / WHEEL_PX_THRESHOLD), 1, 4);
-			nudgeSp((dy > 0 ? 1 : -1) * SPEED_NUDGE * steps);
+			const steps = Math.min(4, Math.max(1, Math.round(Math.abs(dy) / 72)));
+			nudgeSp(SPEED_NUDGE * steps * (dy > 0 ? 1 : -1));
 		},
 		{ passive: true }
 	);
@@ -720,14 +1153,12 @@ function bootstrapMarkersAndUi() {
 	refreshVarCurve();
 	placeMarkers();
 	setStatus('停止中 · ' + fmtDur(SC.ms), 'info');
+	setUiVisibility(loadUiVisibleState());
 
 	chrome.runtime.sendMessage({ type: 'getOptions' }, (resp) => {
 		if (chrome.runtime.lastError) return;
 		const o = resp?.options;
-		if (o && typeof o.defaultSpeed === 'number') {
-			SC.spd = clamp(o.defaultSpeed, SP_MIN, SP_MAX);
-			syncSpeedUi();
-		}
+		setDebugQueryOutputEnabled(o?.debugQueryOutput === true);
 	});
 }
 
@@ -739,6 +1170,10 @@ function fetchRemoteDuration(title, artist) {
 		SC.src = resp.source || 'default';
 		syncDurationInputs();
 		saveState();
+		if (SC.src === 'default' || resp.unavailable) {
+			setStatus('外部APIから曲時間を取得できませんでした（既定 4:00）', 'warn');
+			return;
+		}
 		setStatus('曲時間を取得 · ' + fmtDur(SC.ms) + ' · ' + sourceLabel(SC.src), 'success');
 	});
 }
@@ -766,6 +1201,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 			SC.spd = clamp(msg.speed, SP_MIN, SP_MAX);
 			syncSpeedUi();
 		}
+		if (!SC.uiVisible) {
+			setUiVisibility(true);
+		}
 		startPlay();
 		sendResponse({ ok: true });
 		return true;
@@ -782,13 +1220,35 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		sendResponse({ ok: true });
 		return true;
 	}
+	if (msg?.type === 'toggleUiVisibility') {
+		if (!SC.isSongPage) {
+			sendResponse({ ok: false, reason: 'notSongPage' });
+			return true;
+		}
+		const visible = toggleUiVisibility();
+		sendResponse({ ok: true, visible });
+		return true;
+	}
+	if (msg?.type === 'durationDebugUrl') {
+		showDurationDebugUrl(msg.provider, msg.url);
+		sendResponse({ ok: true });
+		return true;
+	}
 	return false;
 });
 
 function init() {
+	SC.isSongPage = isLikelySongPage();
+	if (!SC.isSongPage) {
+		return;
+	}
+
 	bootstrapMarkersAndUi();
 	const t = extractSongTitle();
 	const a = extractSongArtist();
+	SC.queryTitle = String(t || '');
+	SC.queryArtist = String(a || '');
+	updateQueryPairDisplay();
 	if (t && a) {
 		fetchRemoteDuration(t, a);
 	}

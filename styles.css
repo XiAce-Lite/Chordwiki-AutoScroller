@@ -100,6 +100,12 @@ body.cw-popup-body input[type="range"] {
 	max-width: 120px;
 }
 
+.options-container input[type="checkbox"] {
+	width: 18px;
+	height: 18px;
+	accent-color: #0b65c2;
+}
+
 .options-status {
 	font-size: 13px;
 	color: #0a7a38;
@@ -354,10 +360,30 @@ body.cw-popup-body input[type="range"] {
 	margin-left: 4px;
 }
 
+.cw-query-pair {
+	font-size: 10px;
+	color: #6a7480;
+	margin-left: 2px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
 .cw-est-note {
 	font-size: 10px;
 	color: #8899aa;
 	line-height: 1.35;
+}
+
+.cw-debug-url {
+	margin-top: 6px;
+	padding: 6px 8px;
+	border-radius: 6px;
+	background: #f7f2ff;
+	border: 1px dashed #c9b8e9;
+	color: #4f3b85;
+	font-size: 10px;
+	line-height: 1.4;
+	word-break: break-all;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
 }
 
 /* Markers */
