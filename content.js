@@ -1124,12 +1124,130 @@ function mountUi() {
 	SC.uiRoot = root;
 	updateQueryPairDisplay();
 
-	root.querySelector('#cw-collapse').addEventListener('click', () => {
-		root.classList.toggle('cw-collapsed');
-		const exp = !root.classList.contains('cw-collapsed');
-		root.querySelector('#cw-collapse').setAttribute('aria-expanded', exp ? 'true' : 'false');
+	const UI_RIGHT_MARGIN_PX = 22;
+	const headEl = root.querySelector('.cw-autoscroll-head');
+	const collapseBtn = root.querySelector('#cw-collapse');
+	let drag = null;
+	let lastExpandedLeftPx = '';
+
+	function saveUiPosition() {
+		if (root.classList.contains('cw-collapsed')) return;
+		const left = parseInt(root.style.left, 10);
+		const top = parseInt(root.style.top, 10);
+		if (!Number.isFinite(left) || !Number.isFinite(top)) return;
 		try {
-			localStorage.setItem('cw_ui_collapsed', exp ? '0' : '1');
+			localStorage.setItem(STORAGE_UI_POS_KEY, JSON.stringify({ x: left, y: top }));
+		} catch (e) {
+			void e;
+		}
+	}
+
+	function clampUiInViewport() {
+		const maxTop = Math.max(0, window.innerHeight - root.offsetHeight);
+		let top = parseInt(root.style.top, 10);
+		if (!Number.isFinite(top)) {
+			top = Math.round(root.getBoundingClientRect().top);
+		}
+		root.style.top = clamp(top, 0, maxTop) + 'px';
+
+		if (root.classList.contains('cw-collapsed')) {
+			root.style.left = '';
+			root.style.right = `max(${UI_RIGHT_MARGIN_PX}px, env(safe-area-inset-right, 0px))`;
+			return;
+		}
+
+		let left = parseInt(root.style.left, 10);
+		if (!Number.isFinite(left)) {
+			left = Math.round(root.getBoundingClientRect().left);
+		}
+		const maxLeft = Math.max(0, window.innerWidth - root.offsetWidth);
+		root.style.left = clamp(left, 0, maxLeft) + 'px';
+		root.style.right = 'auto';
+	}
+
+	// 位置復元（x, y のみ）
+	try {
+		const pos = JSON.parse(localStorage.getItem(STORAGE_UI_POS_KEY) || 'null');
+		if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+			root.style.left = pos.x + 'px';
+			root.style.top = pos.y + 'px';
+			root.style.right = 'auto';
+		}
+	} catch (e) {
+		void e;
+	}
+
+	function onDragMove(ev) {
+		if (!drag) return;
+		const maxLeft = Math.max(0, window.innerWidth - root.offsetWidth);
+		const maxTop = Math.max(0, window.innerHeight - root.offsetHeight);
+		const nextLeft = clamp(ev.clientX - drag.offX, 0, maxLeft);
+		const nextTop = clamp(ev.clientY - drag.offY, 0, maxTop);
+		root.style.left = nextLeft + 'px';
+		root.style.top = nextTop + 'px';
+		root.style.right = 'auto';
+	}
+
+	function onDragEnd() {
+		if (!drag) return;
+		drag = null;
+		document.removeEventListener('pointermove', onDragMove);
+		document.removeEventListener('pointerup', onDragEnd);
+		document.removeEventListener('pointercancel', onDragEnd);
+		root.style.cursor = '';
+		document.body.style.cursor = '';
+		saveUiPosition();
+	}
+
+	headEl?.addEventListener('pointerdown', (ev) => {
+		if (ev.button !== 0) return;
+		if (!(ev.target instanceof Element)) return;
+		if (ev.target.closest('button, input, select, textarea, label, a')) return;
+		const rect = root.getBoundingClientRect();
+		root.style.left = Math.round(rect.left) + 'px';
+		root.style.top = Math.round(rect.top) + 'px';
+		root.style.right = 'auto';
+		drag = {
+			offX: ev.clientX - rect.left,
+			offY: ev.clientY - rect.top,
+		};
+		root.style.cursor = 'move';
+		document.body.style.cursor = 'move';
+		document.addEventListener('pointermove', onDragMove);
+		document.addEventListener('pointerup', onDragEnd);
+		document.addEventListener('pointercancel', onDragEnd);
+		ev.preventDefault();
+	});
+
+	window.addEventListener('resize', () => {
+		clampUiInViewport();
+		saveUiPosition();
+	});
+
+	clampUiInViewport();
+
+	collapseBtn?.addEventListener('click', () => {
+		const willCollapse = !root.classList.contains('cw-collapsed');
+		if (willCollapse) {
+			const rect = root.getBoundingClientRect();
+			lastExpandedLeftPx = root.style.left || (Math.round(rect.left) + 'px');
+			root.classList.add('cw-collapsed');
+			root.style.left = '';
+			root.style.right = `max(${UI_RIGHT_MARGIN_PX}px, env(safe-area-inset-right, 0px))`;
+			clampUiInViewport();
+		} else {
+			root.classList.remove('cw-collapsed');
+			if (lastExpandedLeftPx) {
+				root.style.left = lastExpandedLeftPx;
+				root.style.right = 'auto';
+			}
+			clampUiInViewport();
+			saveUiPosition();
+		}
+		const expanded = !root.classList.contains('cw-collapsed');
+		collapseBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+		try {
+			localStorage.setItem('cw_ui_collapsed', expanded ? '0' : '1');
 		} catch (e) {
 			void e;
 		}
@@ -1137,8 +1255,13 @@ function mountUi() {
 
 	try {
 		if (localStorage.getItem('cw_ui_collapsed') === '1') {
+			const rect = root.getBoundingClientRect();
+			lastExpandedLeftPx = root.style.left || (Math.round(rect.left) + 'px');
 			root.classList.add('cw-collapsed');
-			root.querySelector('#cw-collapse').setAttribute('aria-expanded', 'false');
+			root.style.left = '';
+			root.style.right = `max(${UI_RIGHT_MARGIN_PX}px, env(safe-area-inset-right, 0px))`;
+			collapseBtn?.setAttribute('aria-expanded', 'false');
+			clampUiInViewport();
 		}
 	} catch (e) {
 		void e;
