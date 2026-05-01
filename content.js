@@ -3,6 +3,7 @@
 const DEFAULT_DURATION_MS = 240000;
 const STORAGE_NS = 'cw_as_v10';
 const STORAGE_UI_VISIBLE_KEY = 'cw_ui_visible';
+const MARKER_MODEL = 'p-line-v1';
 const MAX_MINUTES = 99;
 const SP_MIN = 0.5;
 const SP_MAX = 3;
@@ -15,6 +16,8 @@ const EDGE = 34;
 const EDGE_BASE = 200;
 const EDGE_MAX = 720;
 const SPEED_NUDGE = 0.05;
+const FOCUS_OVERLAY_MIN_LINES = 4;
+const FOCUS_OVERLAY_MIN_SCROLL_PX = 72;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
 }
@@ -160,9 +163,7 @@ function docBounds(el) {
 	return { t: r.top + window.scrollY, b: r.bottom + window.scrollY };
 }
 function sheetLines(el) {
-	const a = [...el.querySelectorAll('p.line, .comment, p[class*="line"]')];
-	if (a.length) return a;
-	return [...el.querySelectorAll('pre')].slice(0, 80);
+	return [...el.querySelectorAll('p.line')];
 }
 function storageKeyPage() {
 	return STORAGE_NS + ':' + window.location.pathname;
@@ -208,6 +209,8 @@ const SC = /** @type {Record<string, any>} */ ({
 	queryTitle: '',
 	queryArtist: '',
 	queryPairEl: null,
+	focusOverlayEl: null,
+	highlightEnabled: false,
 });
 
 function loadUiVisibleState() {
@@ -287,11 +290,13 @@ function saveState() {
 		localStorage.setItem(
 			storageKeyPage(),
 			JSON.stringify({
+				markerModel: MARKER_MODEL,
 				sx: SC.sx,
 				ex: SC.ex,
 				ms: SC.ms,
 				spd: SC.spd,
 				variable: SC.variable ? 1 : 0,
+				highlight: SC.highlightEnabled ? 1 : 0,
 			})
 		);
 	} catch (e) {
@@ -304,33 +309,40 @@ function restoreState() {
 		const raw = localStorage.getItem(storageKeyPage());
 		if (!raw) return false;
 		const o = JSON.parse(raw);
-		if (!o || typeof o.sx !== 'number') return false;
-		SC.sx = o.sx;
-		SC.ex = typeof o.ex === 'number' ? o.ex : SC.ex;
+		if (!o) return false;
+		const markerRestored =
+			o.markerModel === MARKER_MODEL
+			&& typeof o.sx === 'number'
+			&& typeof o.ex === 'number';
+		if (markerRestored) {
+			SC.sx = o.sx;
+			SC.ex = o.ex;
+		}
 		SC.ms = o.ms || DEFAULT_DURATION_MS;
 		SC.spd = clamp(o.spd ?? 1, SP_MIN, SP_MAX);
 		SC.variable = o.variable !== 0;
-		return true;
+		SC.highlightEnabled = o.highlight !== 0;
+		return markerRestored;
 	} catch (e) {
 		return false;
 	}
 }
 
 const VAR_WEIGHT_FLOOR = 0.12;
-const VAR_COMMENT_WEIGHT = 0.22;
+
+// 歌詞文字数カウントで除外する記号類
+const LYRIC_SYMBOL_RE = /[\s\u0000-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u00BF\u30FB\u30FC\u2010-\u2027\u2030-\u205E\u2060-\u206F\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65]/g;
 
 function lyricLenFromEl(el) {
 	if (!(el instanceof Element)) return 0;
-	// p.comment は歌詞長なし
-	if (el.matches('p.comment')) return 0;
 	// chord span を除いたテキストのみ集計（参考実装と同方式）
 	let total = 0;
 	el.querySelectorAll('span:not(.chord)').forEach((node) => {
-		total += String(node.textContent || '').replace(/\s+/g, ' ').trim().length;
+		total += String(node.textContent || '').replace(LYRIC_SYMBOL_RE, '').length;
 	});
 	// span 構造がない場合（fallback）
 	if (total === 0) {
-		total = String(el.innerText || '').replace(/\s+/g, '').length;
+		total = String(el.innerText || '').replace(LYRIC_SYMBOL_RE, '').length;
 	}
 	return total;
 }
@@ -356,27 +368,17 @@ function buildVarCurve() {
 		const r = el.getBoundingClientRect();
 		const centerY = (r.top + r.bottom) / 2 + window.scrollY;
 		if (centerY < SC.sx - 14 || centerY > SC.ex + 14) continue;
-		const isComment = el.matches('p.comment');
 		entries.push({
 			y: centerY,
-			lz: isComment ? 0 : lyricLenFromEl(el),
-			h: Math.max(r.height || 14, 1),
-			isComment,
+			lz: lyricLenFromEl(el),
+			h: 0, // unused
 		});
 	}
 	if (entries.length < 2) return null;
 
-	// 各エントリのrawウェイト計算
+	// 各エントリのウェイト計算（歌詞文字数のみ）
 	const lyricRaw = entries.map((e) => e.lz);
-	const heightRaw = entries.map((e) => e.h);
-	const lyricN = normalizeVarWeights(lyricRaw);
-	const heightN = normalizeVarWeights(heightRaw);
-
-	const rawWeights = entries.map((e, i) => {
-		if (e.isComment) return VAR_COMMENT_WEIGHT;
-		return lyricN[i] * 0.65 + heightN[i] * 0.35;
-	});
-	const finalWeights = normalizeVarWeights(rawWeights);
+	const finalWeights = normalizeVarWeights(lyricRaw);
 
 	// セグメント間のウェイトでタイムライン構築（参考実装と同方式）
 	const segWeights = finalWeights.slice(0, -1);
@@ -482,6 +484,7 @@ function stopPlay(msg, options) {
 	SC.userScrollOverrideUntilMs = 0;
 	SC.virtualScrollY = 0;
 	SC.rewindPending = reachedEnd;
+	setFocusOverlayActive(false);
 	if (typeof msg === 'string' && SC.statusEl) {
 		SC.statusEl.textContent = msg;
 		SC.statusEl.dataset.tone = 'info';
@@ -538,6 +541,7 @@ function frame(nowMs) {
 			// スクロールが必要な行に到達 → 本編へ移行（fall through）
 			SC.phase = 'main';
 			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
+			setFocusOverlayActive(true);
 		} else {
 			// まだ初期表示範囲内 → スクロールなし
 			updatePlayingStatusText();
@@ -591,6 +595,7 @@ function setMarkerXY(which, docY, persist) {
 	}
 	refreshVarCurve();
 	placeMarkers();
+	setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
 	if (persist) {
 		saveState();
 		setStatus('マーカーを保存しました', 'success');
@@ -697,7 +702,65 @@ function onResizeLayout() {
 	}
 	refreshVarCurve();
 	placeMarkers();
+	updateFocusOverlayGeometry();
+	setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
 }
+
+function estimateLineHeightPx() {
+	const lines = sheetLines(getSheetEl());
+	const heights = [];
+	for (const line of lines.slice(0, 24)) {
+		const rectH = Math.round(line.getBoundingClientRect().height);
+		if (rectH >= 10 && rectH <= 160) {
+			heights.push(rectH);
+		}
+	}
+	if (!heights.length) {
+		return 28;
+	}
+	heights.sort((a, b) => a - b);
+	return heights[Math.floor(heights.length / 2)] || 28;
+}
+
+function updateFocusOverlayGeometry() {
+	if (!(SC.focusOverlayEl instanceof Element)) return;
+	const lineHeight = estimateLineHeightPx();
+	const highlightH = clamp(Math.round(lineHeight * 11), 120, Math.max(140, window.innerHeight - 80));
+	const top = Math.max(0, Math.round((window.innerHeight - highlightH) / 2));
+	SC.focusOverlayEl.style.setProperty('--cw-focus-top', top + 'px');
+	SC.focusOverlayEl.style.setProperty('--cw-focus-h', highlightH + 'px');
+}
+
+function countLinesInMarkerRange() {
+	const lines = sheetLines(getSheetEl());
+	if (!lines.length) return 0;
+	let count = 0;
+	for (const line of lines) {
+		const r = line.getBoundingClientRect();
+		const centerY = (r.top + r.bottom) / 2 + window.scrollY;
+		if (centerY >= SC.sx - 14 && centerY <= SC.ex + 14) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
+function canUseFocusOverlay() {
+	if (!SC.highlightEnabled) return false;
+	if (vmax() < FOCUS_OVERLAY_MIN_SCROLL_PX) return false;
+	const lineCount = countLinesInMarkerRange();
+	if (lineCount < FOCUS_OVERLAY_MIN_LINES) return false;
+	const scrollRange = Math.abs(yScrollEndStop() - yScrollStartFocus());
+	const rangeThreshold = Math.max(FOCUS_OVERLAY_MIN_SCROLL_PX, Math.round(estimateLineHeightPx() * 2));
+	return scrollRange >= rangeThreshold;
+}
+
+function setFocusOverlayActive(active) {
+	if (!(SC.focusOverlayEl instanceof Element)) return;
+	const visible = active && SC.uiVisible && canUseFocusOverlay();
+	SC.focusOverlayEl.style.display = visible ? '' : 'none';
+}
+
 function syncSpeedUi() {
 	const sp = clamp(SC.spd, SP_MIN, SP_MAX);
 	SC.spd = sp;
@@ -832,6 +895,7 @@ function resetMarkersUi() {
 	SC.ex = SC.dey;
 	refreshVarCurve();
 	placeMarkers();
+	setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
 	saveState();
 	setStatus('マーカーを既定位置へ', 'info');
 }
@@ -897,6 +961,8 @@ function startPlay() {
 		SC.btnPlay.textContent = '停止';
 		SC.btnPlay.classList.toggle('cw-playing', true);
 	}
+	updateFocusOverlayGeometry();
+	setFocusOverlayActive(SC.phase !== 'lead-in');
 	updatePlayingStatusText();
 	SC.frame = requestAnimationFrame(frame);
 	saveState();
@@ -945,6 +1011,7 @@ function setUiVisibility(visible) {
 	if (SC.mLay) {
 		SC.mLay.style.display = SC.uiVisible ? '' : 'none';
 	}
+	setFocusOverlayActive(SC.playing);
 	saveUiVisibleState(SC.uiVisible);
 }
 
@@ -973,6 +1040,10 @@ function wireMarkerLayer(layer) {
 
 function mountUi() {
 	if (document.getElementById('cw-autoscroll-root')) return;
+	const focusOverlay = document.createElement('div');
+	focusOverlay.id = 'cw-autoscroll-focus-overlay';
+	focusOverlay.className = 'cw-focus-overlay';
+
 	const layer = document.createElement('div');
 	layer.id = 'cw-autoscroll-marker-layer';
 	layer.className = 'cw-marker-layer';
@@ -1018,7 +1089,10 @@ function mountUi() {
 		'<div class="cw-actions">' +
 		'<button type="button" id="cw-play">開始</button>' +
 		'<button type="button" id="cw-reset-markers">↺ Marker</button>' +
+		'<div class="cw-toggle-stack">' +
 		'<label class="cw-var-toggle"><input type="checkbox" id="cw-variable" checked /><span>可変スクロール</span></label>' +
+		'<label class="cw-hl-toggle"><input type="checkbox" id="cw-highlight" checked /><span>ハイライト表示</span></label>' +
+		'</div>' +
 		'</div>' +
 		'<div class="cw-est-row">推定時間 <span id="cw-est-dur">--:--</span> <span id="cw-src" class="cw-src"></span> <span id="cw-query-pair" class="cw-query-pair">:</span></div>' +
 		'<div class="cw-remain-row">残り時間 <span id="cw-remain">--:--</span></div>' +
@@ -1026,8 +1100,12 @@ function mountUi() {
 		'<div class="cw-est-note">スライダーはページ・ポップアップ共通で速度を変更します</div>' +
 		'</div>';
 
+	document.body.appendChild(focusOverlay);
 	document.body.appendChild(layer);
 	document.body.appendChild(root);
+	SC.focusOverlayEl = focusOverlay;
+	updateFocusOverlayGeometry();
+	setFocusOverlayActive(false);
 
 	wireMarkerLayer(layer);
 
@@ -1104,6 +1182,16 @@ function mountUi() {
 		refreshVarCurve();
 		saveState();
 		setStatus(SC.variable ? '可変スクロール ON' : '等速モード', 'info');
+	});
+
+	const highlightCb = root.querySelector('#cw-highlight');
+	highlightCb.checked = SC.highlightEnabled;
+	highlightCb.addEventListener('change', () => {
+		SC.highlightEnabled = highlightCb.checked;
+		saveState();
+		updateFocusOverlayGeometry();
+		setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
+		setStatus(SC.highlightEnabled ? 'ハイライト表示 ON' : 'ハイライト表示 OFF', 'info');
 	});
 
 	window.addEventListener('scroll', () => {
