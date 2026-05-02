@@ -8,9 +8,13 @@ function formatSource(src) {
 function queryActiveChordwikiTab(cb) {
 	chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
 		const tab = tabs[0];
-		const url = tab?.url || '';
-		const ok =
-			url.includes('chordwiki.org') || url.includes('ja.chordwiki.org');
+		let ok = false;
+		try {
+			const u = new URL(tab?.url || '');
+			ok = u.hostname === 'ja.chordwiki.org' && u.pathname.startsWith('/wiki/');
+		} catch {
+			ok = false;
+		}
 		cb(tab?.id, ok);
 	});
 }

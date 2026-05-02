@@ -5,6 +5,7 @@
 
 const STORAGE_OPTIONS_KEY = 'cw_autoscroller_options';
 const STORAGE_SESSION_SPEED_KEY = 'cw_autoscroller_session_speed';
+const CHORDWIKI_HOSTNAME = 'ja.chordwiki.org';
 
 const DEFAULT_OPTIONS = {
 	debugQueryOutput: false,
@@ -14,7 +15,7 @@ const DEFAULT_DURATION_MS = 240_000;
 
 /** MusicBrainz requires a descriptive User-Agent. */
 const MUSICBRAINZ_USER_AGENT =
-	'Chordwiki-AutoScroller/1.0.2 (https://github.com/)';
+	'Chordwiki-AutoScroller/1.0.25 (https://github.com/)';
 
 // -----------------------------------------------------------------------------
 // Options
@@ -222,7 +223,7 @@ function isChordwikiUrl(url) {
 	}
 	try {
 		const u = new URL(url);
-		return u.hostname === 'chordwiki.org' || u.hostname === 'ja.chordwiki.org';
+		return u.hostname === CHORDWIKI_HOSTNAME;
 	} catch {
 		return false;
 	}
@@ -235,6 +236,9 @@ function isChordwikiSongPageUrl(url) {
 
 	try {
 		const u = new URL(url);
+		if (!u.pathname.startsWith('/wiki/')) {
+			return false;
+		}
 		if (u.pathname === '/' || u.pathname === '') {
 			return false;
 		}

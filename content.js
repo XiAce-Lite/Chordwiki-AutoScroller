@@ -3,6 +3,8 @@
 const DEFAULT_DURATION_MS = 240000;
 const STORAGE_NS = 'cw_as_v10';
 const STORAGE_UI_VISIBLE_KEY = 'cw_ui_visible';
+const STORAGE_UI_POS_KEY = 'cw_ui_pos';
+const STORAGE_UI_COLLAPSED_KEY = 'cw_ui_collapsed';
 const MARKER_MODEL = 'p-line-v1';
 const MAX_MINUTES = 99;
 const SP_MIN = 0.5;
@@ -134,7 +136,7 @@ function extractSongArtist() {
 	return candidate || null;
 }
 function isLikelySongPage() {
-	if (!/^(?:www\.)?(?:ja\.)?chordwiki\.org$/i.test(window.location.hostname)) {
+	if (!/^ja\.chordwiki\.org$/i.test(window.location.hostname)) {
 		return false;
 	}
 
@@ -1247,14 +1249,14 @@ function mountUi() {
 		const expanded = !root.classList.contains('cw-collapsed');
 		collapseBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
 		try {
-			localStorage.setItem('cw_ui_collapsed', expanded ? '0' : '1');
+			localStorage.setItem(STORAGE_UI_COLLAPSED_KEY, expanded ? '0' : '1');
 		} catch (e) {
 			void e;
 		}
 	});
 
 	try {
-		if (localStorage.getItem('cw_ui_collapsed') === '1') {
+		if (localStorage.getItem(STORAGE_UI_COLLAPSED_KEY) === '1') {
 			const rect = root.getBoundingClientRect();
 			lastExpandedLeftPx = root.style.left || (Math.round(rect.left) + 'px');
 			root.classList.add('cw-collapsed');
