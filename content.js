@@ -499,7 +499,7 @@ function stopPlay(msg, options) {
 	}
 }
 
-const END_STOP_BUFFER_PX = 100;
+const END_STOP_BUFFER_PX = 0;
 
 function visibleEndEnough() {
 	if (!(SC.mEnd instanceof Element)) return false;
