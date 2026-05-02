@@ -246,7 +246,7 @@ function applyDefaults() {
 		const r0 = L[0].getBoundingClientRect();
 		const r1 = L[L.length - 1].getBoundingClientRect();
 		SC.dsy = Math.round(r0.top + window.scrollY);
-		SC.dey = Math.round(r1.top + window.scrollY);
+		SC.dey = Math.round(r1.bottom + window.scrollY);
 	}
 }
 
