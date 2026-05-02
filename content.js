@@ -513,7 +513,10 @@ const END_STOP_BUFFER_PX = 40;
 function visibleEndEnough() {
 	if (!(SC.mEnd instanceof Element)) return false;
 	const r = SC.mEnd.getBoundingClientRect();
-	return r.top <= window.innerHeight - END_STOP_BUFFER_PX;
+	const reachedWithBuffer = r.top <= window.innerHeight - END_STOP_BUFFER_PX;
+	const atPageEnd = window.scrollY >= vmax() - 1;
+	const visibleInViewport = r.bottom >= 0 && r.top <= window.innerHeight;
+	return reachedWithBuffer || (atPageEnd && visibleInViewport);
 }
 
 function frame(nowMs) {
