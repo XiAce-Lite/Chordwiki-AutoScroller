@@ -34,7 +34,7 @@ function fmtDur(ms0) {
 	const s = clamp(Math.round(ms / 1000), 0, MAX_MINUTES * 60 + 59);
 	const m = Math.floor(s / 60);
 	const sec = s % 60;
-	return m + ':' + pad2(sec);
+	return pad2(m) + ':' + pad2(sec);
 }
 
 function fmtSpeed(spd0) {
@@ -271,20 +271,19 @@ function normalizeMinSec(ma, sb) {
 	if (!Number.isFinite(m)) m = 0;
 	if (!Number.isFinite(s)) s = 0;
 	while (s >= 60) {
-		m++;
+		m += 1;
 		s -= 60;
 	}
-	while (s < 0 && m > 0) {
-		m--;
+	while (s < 0) {
+		m -= 1;
 		s += 60;
 	}
-	while (s < 0 && m === 0) {
-		s = 0;
-	}
 	m = clamp(m, 0, MAX_MINUTES);
-	s = clamp(s, 0, 59);
-	const totalMs = clamp(m * 60 + s, 0, MAX_MINUTES * 60 + 59) * 1000;
-	return { m: m, sec: s, totalMs };
+	let totalSec = (m * 60) + s;
+	totalSec = clamp(totalSec, 1, MAX_MINUTES * 60 + 59);
+	const nm = Math.floor(totalSec / 60);
+	const ns = totalSec % 60;
+	return { m: nm, sec: ns, totalMs: totalSec * 1000 };
 }
 
 function saveState() {
@@ -782,8 +781,8 @@ function syncDurationInputs() {
 	const sec = clamp(Math.round(SC.ms / 1000), 1, MAX_MINUTES * 60 + 59);
 	const mi = Math.floor(sec / 60);
 	const ss = sec % 60;
-	if (SC.inMin) SC.inMin.value = String(mi);
-	if (SC.inSec) SC.inSec.value = String(ss);
+	if (SC.inMin) SC.inMin.value = pad2(mi);
+	if (SC.inSec) SC.inSec.value = pad2(ss);
 	if (SC.estDurEl) SC.estDurEl.textContent = fmtDur(SC.ms);
 	if (SC.srcEl) SC.srcEl.textContent = sourceLabel(SC.src);
 }
@@ -874,8 +873,23 @@ function syncPlaybackFromScrollY(scrollY) {
 	updatePlayingStatusText();
 }
 
-function applyDurationFromInputs(notify) {
-	const n = normalizeMinSec(SC.inMin?.value, SC.inSec?.value);
+function applyDurationFromInputs(notify, opts) {
+	let mRaw = SC.inMin?.value;
+	let sRaw = SC.inSec?.value;
+	if (opts?.borrowFromOne === true) {
+		const mNum = parseInt(String(mRaw || '0'), 10);
+		const sNum = parseInt(String(sRaw || '0'), 10);
+		if (Number.isFinite(mNum) && Number.isFinite(sNum) && sNum === 0) {
+			if (mNum > 0) {
+				mRaw = String(mNum - 1);
+				sRaw = '59';
+			} else {
+				mRaw = '0';
+				sRaw = '1';
+			}
+		}
+	}
+	const n = normalizeMinSec(mRaw, sRaw);
 	SC.inMin.value = String(n.m);
 	SC.inSec.value = String(n.sec);
 	SC.ms = Math.max(1000, n.totalMs);
@@ -1071,7 +1085,7 @@ function mountUi() {
 		'<div class="cw-duration-row">' +
 		'<input id="cw-min" type="number" min="0" max="99" step="1" value="4" inputmode="numeric" />' +
 		'<span class="cw-colon">:</span>' +
-		'<input id="cw-sec" type="number" min="0" max="59" step="1" value="0" inputmode="numeric" />' +
+		'<input id="cw-sec" type="number" min="0" step="1" value="0" inputmode="numeric" />' +
 		'<button type="button" id="cw-reset-time" class="cw-inline-reset">↺ Time</button>' +
 		'</div>' +
 		'<div class="cw-presets">' +
@@ -1276,7 +1290,14 @@ function mountUi() {
 	});
 
 	root.querySelector('#cw-min').addEventListener('input', () => applyDurationFromInputs(false));
-	root.querySelector('#cw-sec').addEventListener('input', () => applyDurationFromInputs(false));
+	root.querySelector('#cw-sec').addEventListener('input', (ev) => {
+		const secEl = ev.currentTarget;
+		const secNum = parseInt(String(secEl?.value || '0'), 10);
+		const totalSec = clamp(Math.round(SC.ms / 1000), 1, MAX_MINUTES * 60 + 59);
+		const prevSec = totalSec % 60;
+		const borrowFromOne = Number.isFinite(secNum) && prevSec === 1 && secNum === 0;
+		applyDurationFromInputs(false, { borrowFromOne });
+	});
 
 	root.querySelectorAll('.cw-preset').forEach((btn) => {
 		btn.addEventListener('click', () =>
