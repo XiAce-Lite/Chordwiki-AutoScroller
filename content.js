@@ -508,7 +508,7 @@ function stopPlay(msg, options) {
 	}
 }
 
-const END_STOP_BUFFER_PX = 10;
+const END_STOP_BUFFER_PX = 40;
 
 function visibleEndEnough() {
 	if (!(SC.mEnd instanceof Element)) return false;
