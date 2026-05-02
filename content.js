@@ -241,11 +241,14 @@ function applyDefaults() {
 	const b = docBounds(sh);
 	SC.dsy = b.t;
 	SC.dey = b.b;
-	const L = sheetLines(sh);
-	if (L.length) {
-		const r0 = L[0].getBoundingClientRect();
-		const r1 = L[L.length - 1].getBoundingClientRect();
+	const topLines = sheetLines(sh);
+	if (topLines.length) {
+		const r0 = topLines[0].getBoundingClientRect();
 		SC.dsy = Math.round(r0.top + window.scrollY);
+	}
+	const allPLines = [...sh.querySelectorAll('p.line')];
+	if (allPLines.length) {
+		const r1 = allPLines[allPLines.length - 1].getBoundingClientRect();
 		SC.dey = Math.round(r1.bottom + window.scrollY);
 	}
 }
