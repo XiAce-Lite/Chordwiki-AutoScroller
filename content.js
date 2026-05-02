@@ -246,9 +246,11 @@ function applyDefaults() {
 		const r0 = topLines[0].getBoundingClientRect();
 		SC.dsy = Math.round(r0.top + window.scrollY);
 	}
-	const allPLines = [...sh.querySelectorAll('p.line')];
-	if (allPLines.length) {
-		const r1 = allPLines[allPLines.length - 1].getBoundingClientRect();
+	const chordPLines = [...sh.querySelectorAll('p.line')].filter((lineEl) =>
+		lineEl instanceof HTMLParagraphElement && lineEl.querySelector('span.chord')
+	);
+	if (chordPLines.length) {
+		const r1 = chordPLines[chordPLines.length - 1].getBoundingClientRect();
 		SC.dey = Math.round(r1.bottom + window.scrollY);
 	}
 }
