@@ -93,10 +93,13 @@ function trimArtistBoundaryText(value) {
 }
 
 function findArtistStartIndex(subtitle) {
+	const singerToken = '(?:歌|唄|vo(?:cal)?)';
+	const roleToken = '(?:作詞|作曲|編曲|補作詞|訳詞|words|music|arranged|produced)';
 	const patterns = [
-		/歌[：:]/,
-		/歌・(?:作詞・作曲|作詞|作曲|編曲)[：:]/,
-		/歌・/
+		new RegExp(`${singerToken}(?:\\s*[・/／]\\s*${roleToken})*\\s*[：:]`, 'i'),
+		new RegExp(`${singerToken}(?:\\s*[・/／]\\s*${roleToken})*\\s*[・/／]`, 'i'),
+		new RegExp(`${singerToken}\\s*[：:]`, 'i'),
+		new RegExp(`${singerToken}\\s*[・/／]`, 'i')
 	];
 
 	for (const pattern of patterns) {
