@@ -499,10 +499,12 @@ function stopPlay(msg, options) {
 	}
 }
 
+const END_STOP_BUFFER_PX = 100;
+
 function visibleEndEnough() {
 	if (!(SC.mEnd instanceof Element)) return false;
 	const r = SC.mEnd.getBoundingClientRect();
-	return r.top < window.innerHeight - 94;
+	return r.top <= window.innerHeight - END_STOP_BUFFER_PX;
 }
 
 function frame(nowMs) {
@@ -523,6 +525,13 @@ function frame(nowMs) {
 		SC.frame = requestAnimationFrame(frame);
 		return;
 	}
+
+	// エンドマーカーが見えたら、カウントダウンより優先して停止（フレーム先頭チェック）
+	if (visibleEndEnough()) {
+		stopPlay('エンドまで到達しました。クリックで先頭へ戻ります。', { reachedEnd: true });
+		return;
+	}
+
 	const speedFactor = clamp(SC.spd || 1, SP_MIN, SP_MAX);
 	SC.elapsed = Math.min(SC.ms, SC.elapsed + dtMs * speedFactor);
 
@@ -557,11 +566,15 @@ function frame(nowMs) {
 	const u = SC.elapsed / SC.ms;
 	scrollToProg(u, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
 	updatePlayingStatusText();
-	SC.frame = requestAnimationFrame(frame);
-	if (SC.elapsed > 450 && visibleEndEnough()) {
-		stopPlay('エンドまで到達しました。クリックで先頭へ戻ります。', { reachedEnd: true });
-	}
 	if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
+
+	// スクロール後の再チェック（スクロールで新たに見えた場合）
+	if (visibleEndEnough()) {
+		stopPlay('エンドまで到達しました。クリックで先頭へ戻ります。', { reachedEnd: true });
+		return;
+	}
+
+	SC.frame = requestAnimationFrame(frame);
 }
 
 function setStatus(text, tone) {
