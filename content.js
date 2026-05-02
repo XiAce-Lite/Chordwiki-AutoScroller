@@ -251,7 +251,7 @@ function applyDefaults() {
 	);
 	if (chordPLines.length) {
 		const r1 = chordPLines[chordPLines.length - 1].getBoundingClientRect();
-		SC.dey = Math.round(r1.bottom + window.scrollY);
+		SC.dey = Math.round(r1.bottom + END_STOP_BUFFER_PX + window.scrollY);
 	}
 }
 

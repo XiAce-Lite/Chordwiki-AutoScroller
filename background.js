@@ -15,7 +15,7 @@ const DEFAULT_DURATION_MS = 240_000;
 
 /** MusicBrainz requires a descriptive User-Agent. */
 const MUSICBRAINZ_USER_AGENT =
-	'Chordwiki-AutoScroller/1.0.34 (https://github.com/)';
+	'Chordwiki-AutoScroller/1.0.35 (https://github.com/)';
 
 // -----------------------------------------------------------------------------
 // Options
