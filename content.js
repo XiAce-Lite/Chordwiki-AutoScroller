@@ -817,7 +817,6 @@ function stepOverlayScreenY(targetY, dtMs) {
 	void targetY; void dtMs; // legacy shim - no longer used in frame
 }
 
-function startOverlayEndAnimation() {
 function startOverlayEndAnimation(durationMs) {
 	if (SC.overlayEndAnimId) cancelAnimationFrame(SC.overlayEndAnimId);
 	const exScreenY = SC.ex - window.scrollY;
