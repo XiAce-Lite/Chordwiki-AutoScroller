@@ -819,18 +819,22 @@ function stepOverlayScreenY(targetY, dtMs) {
 
 function startOverlayEndAnimation(durationMs) {
 	if (SC.overlayEndAnimId) cancelAnimationFrame(SC.overlayEndAnimId);
-	const lineH = estimateLineHeightPx();
-	const endOffsetPx = lineH * 2;
-	const exScreenY = SC.ex - window.scrollY;
-	const targetCenter = exScreenY - endOffsetPx - SC.overlayHighlightH / 2;
+	// エンドマーカーの上端・下端スクリーンY（実 DOM 矩形優先）
+	const mEndRect = SC.mEnd instanceof Element ? SC.mEnd.getBoundingClientRect() : null;
+	const exTopScreenY = mEndRect ? mEndRect.top : SC.ex - window.scrollY;
+	const exBottomScreenY = mEndRect ? mEndRect.bottom : SC.ex - window.scrollY;
+	// phase1: タイマー0でハイライト下端がエンドマーカー上端に来る位置
+	const phase1Center = exTopScreenY - SC.overlayHighlightH / 2;
+	// phase2: ハイライト下端がエンドマーカー下端に来る位置（最終停止）
+	const phase2Center = Math.max(phase1Center, exBottomScreenY - SC.overlayHighlightH / 2);
 	const startCenter = SC.overlayScreenY !== null ? SC.overlayScreenY : window.innerHeight / 2;
-	const totalDist = targetCenter - startCenter;
+	const totalDist = phase1Center - startCenter;
 	if (totalDist <= 0 || durationMs < 50) {
-		SC.overlayScreenY = Math.min(startCenter, targetCenter);
+		SC.overlayScreenY = phase1Center;
 		applyOverlayTop();
 		return;
 	}
-	const speed = totalDist / (durationMs / 1000); // px/s、カウントダウン終了と同時に到達
+	const speed = totalDist / (durationMs / 1000); // px/s: タイマー0でphase1に到達
 	let prevMs = null;
 	function animStep(nowMs) {
 		if (prevMs === null) prevMs = nowMs;
@@ -838,11 +842,17 @@ function startOverlayEndAnimation(durationMs) {
 		prevMs = nowMs;
 		const step = speed * dtMs / 1000;
 		const current = SC.overlayScreenY;
-		const dist = targetCenter - current;
+		// phase1到達後はphase2へ同速で継続
+		const target = current >= phase1Center ? phase2Center : phase1Center;
+		const dist = target - current;
 		if (dist <= step) {
-			SC.overlayScreenY = targetCenter;
+			SC.overlayScreenY = target;
 			applyOverlayTop();
-			SC.overlayEndAnimId = null;
+			if (target >= phase2Center) {
+				SC.overlayEndAnimId = null; // phase2到達で停止
+			} else {
+				SC.overlayEndAnimId = requestAnimationFrame(animStep); // phase1→phase2へ継続
+			}
 		} else {
 			SC.overlayScreenY = current + step;
 			applyOverlayTop();
