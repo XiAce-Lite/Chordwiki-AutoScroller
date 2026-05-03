@@ -1523,11 +1523,24 @@ function bootstrapMarkersAndUi() {
 }
 
 function fetchRemoteDuration(title, artist) {
+	const savedMs = SC.ms;
+	const hasSavedMs = savedMs !== DEFAULT_DURATION_MS;
 	chrome.runtime.sendMessage({ type: 'getDuration', title: title, artist: artist }, (resp) => {
 		if (chrome.runtime.lastError || !resp || resp.type !== 'durationResult') return;
 		const ms = typeof resp.duration === 'number' ? resp.duration : DEFAULT_DURATION_MS;
+		const src = resp.source || 'default';
+		if (hasSavedMs) {
+			SC.src = src;
+			syncDurationInputs();
+			if (src === 'default' || resp.unavailable) {
+				setStatus('外部APIから曲時間を取得できませんでした（保存値 ' + fmtDur(savedMs) + ' を使用）', 'warn');
+			} else {
+				setStatus('保存値を使用 · ' + fmtDur(savedMs) + '（API: ' + fmtDur(ms) + '）', 'info');
+			}
+			return;
+		}
 		SC.ms = Math.max(1000, ms);
-		SC.src = resp.source || 'default';
+		SC.src = src;
 		syncDurationInputs();
 		saveState();
 		if (SC.src === 'default' || resp.unavailable) {
