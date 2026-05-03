@@ -489,6 +489,7 @@ function scrollToProg(u, focusRatio) {
 
 function stopPlay(msg, options) {
 	const reachedEnd = options?.reachedEnd === true;
+	const remainingMs = Math.max(0, SC.ms - SC.elapsed);
 	if (SC.frame) {
 		cancelAnimationFrame(SC.frame);
 		SC.frame = null;
@@ -505,7 +506,7 @@ function stopPlay(msg, options) {
 	SC.rewindPending = reachedEnd;
 	if (reachedEnd) {
 		setFocusOverlayActive(true);
-		startOverlayEndAnimation();
+		startOverlayEndAnimation(remainingMs);
 	} else {
 		if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
 		SC.overlayScreenY = null;
@@ -817,19 +818,25 @@ function stepOverlayScreenY(targetY, dtMs) {
 }
 
 function startOverlayEndAnimation() {
+function startOverlayEndAnimation(durationMs) {
 	if (SC.overlayEndAnimId) cancelAnimationFrame(SC.overlayEndAnimId);
-	const lineH = estimateLineHeightPx();
-	const speed = lineH / (OVERLAY_END_LINE_INTERVAL_MS / 1000); // px/s = 1行分/interval
+	const exScreenY = SC.ex - window.scrollY;
+	const targetCenter = exScreenY - SC.overlayHighlightH / 2;
+	const startCenter = SC.overlayScreenY !== null ? SC.overlayScreenY : window.innerHeight / 2;
+	const totalDist = targetCenter - startCenter;
+	if (totalDist <= 0 || durationMs < 50) {
+		SC.overlayScreenY = Math.min(startCenter, targetCenter);
+		applyOverlayTop();
+		return;
+	}
+	const speed = totalDist / (durationMs / 1000); // px/s、カウントダウン終了と同時に到達
 	let prevMs = null;
 	function animStep(nowMs) {
 		if (prevMs === null) prevMs = nowMs;
 		const dtMs = clamp(nowMs - prevMs, 0, 120);
 		prevMs = nowMs;
-		// ハイライト最下行がエンドマーカーに到達 = 中心Yが (exScreenY - highlightH/2)
-		const exScreenY = SC.ex - window.scrollY;
-		const targetCenter = exScreenY - SC.overlayHighlightH / 2;
-		const current = SC.overlayScreenY !== null ? SC.overlayScreenY : window.innerHeight / 2;
 		const step = speed * dtMs / 1000;
+		const current = SC.overlayScreenY;
 		const dist = targetCenter - current;
 		if (dist <= step) {
 			SC.overlayScreenY = targetCenter;
