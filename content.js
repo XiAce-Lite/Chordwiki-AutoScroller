@@ -20,7 +20,7 @@ const EDGE_MAX = 720;
 const SPEED_NUDGE = 0.05;
 const FOCUS_OVERLAY_MIN_LINES = 4;
 const FOCUS_OVERLAY_MIN_SCROLL_PX = 72;
-const OVERLAY_MOVE_PX_PER_S = 200;
+const OVERLAY_END_LINE_INTERVAL_MS = 400;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
 }
@@ -224,6 +224,8 @@ const SC = /** @type {Record<string, any>} */ ({
 	overlayScreenY: null,
 	overlayHighlightH: 140,
 	overlayEndAnimId: null,
+	overlayPhase: 'center',
+	overlayPrevScrollY: 0,
 });
 
 function loadUiVisibleState() {
@@ -545,8 +547,18 @@ function frame(nowMs) {
 	SC.tPrev = nowMs;
 
 	if (nowMs < (SC.userScrollOverrideUntilMs || 0)) {
+		const scrollDelta = window.scrollY - SC.overlayPrevScrollY;
+		SC.overlayPrevScrollY = window.scrollY;
+		if (SC.overlayPhase === 'start-to-center') {
+			SC.overlayScreenY = (SC.overlayScreenY || window.innerHeight / 2) + 1.2 * scrollDelta;
+			if (SC.overlayScreenY >= window.innerHeight / 2) {
+				SC.overlayScreenY = window.innerHeight / 2;
+				SC.overlayPhase = 'center';
+			}
+		} else {
+			SC.overlayScreenY = window.innerHeight / 2;
+		}
 		SC.virtualScrollY = window.scrollY;
-		stepOverlayScreenY(window.innerHeight / 2, dtMs);
 		applyOverlayTop();
 		updatePlayingStatusText();
 		if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
@@ -581,7 +593,7 @@ function frame(nowMs) {
 			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
 		} else {
 			// まだ初期表示範囲内 → スクロールなし
-			stepOverlayScreenY(SC.sx - window.scrollY + SC.overlayHighlightH / 2, dtMs);
+			SC.overlayPrevScrollY = window.scrollY;
 			applyOverlayTop();
 			updatePlayingStatusText();
 			if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
@@ -594,7 +606,17 @@ function frame(nowMs) {
 	if (!SC.hasScrollStarted) SC.hasScrollStarted = true;
 	const u = SC.elapsed / SC.ms;
 	scrollToProg(u, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
-	stepOverlayScreenY(window.innerHeight / 2, dtMs);
+	if (SC.overlayPhase === 'start-to-center') {
+		const scrollDelta = window.scrollY - SC.overlayPrevScrollY;
+		SC.overlayScreenY = (SC.overlayScreenY || window.innerHeight / 2) + 1.2 * scrollDelta;
+		if (SC.overlayScreenY >= window.innerHeight / 2) {
+			SC.overlayScreenY = window.innerHeight / 2;
+			SC.overlayPhase = 'center';
+		}
+	} else {
+		SC.overlayScreenY = window.innerHeight / 2;
+	}
+	SC.overlayPrevScrollY = window.scrollY;
 	applyOverlayTop();
 	updatePlayingStatusText();
 	if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
@@ -791,33 +813,32 @@ function applyOverlayTop() {
 }
 
 function stepOverlayScreenY(targetY, dtMs) {
-	if (typeof SC.overlayScreenY !== 'number') {
-		SC.overlayScreenY = targetY;
-		return;
-	}
-	const maxStep = OVERLAY_MOVE_PX_PER_S * dtMs / 1000;
-	const dist = targetY - SC.overlayScreenY;
-	if (Math.abs(dist) <= maxStep) {
-		SC.overlayScreenY = targetY;
-	} else {
-		SC.overlayScreenY += Math.sign(dist) * maxStep;
-	}
+	void targetY; void dtMs; // legacy shim - no longer used in frame
 }
 
 function startOverlayEndAnimation() {
 	if (SC.overlayEndAnimId) cancelAnimationFrame(SC.overlayEndAnimId);
+	const lineH = estimateLineHeightPx();
+	const speed = lineH / (OVERLAY_END_LINE_INTERVAL_MS / 1000); // px/s = 1行分/interval
 	let prevMs = null;
 	function animStep(nowMs) {
 		if (prevMs === null) prevMs = nowMs;
 		const dtMs = clamp(nowMs - prevMs, 0, 120);
 		prevMs = nowMs;
-		const targetY = SC.ex - window.scrollY;
-		stepOverlayScreenY(targetY, dtMs);
-		applyOverlayTop();
-		if (Math.abs(SC.overlayScreenY - targetY) > 0.5) {
-			SC.overlayEndAnimId = requestAnimationFrame(animStep);
-		} else {
+		// ハイライト最下行がエンドマーカーに到達 = 中心Yが (exScreenY - highlightH/2)
+		const exScreenY = SC.ex - window.scrollY;
+		const targetCenter = exScreenY - SC.overlayHighlightH / 2;
+		const current = SC.overlayScreenY !== null ? SC.overlayScreenY : window.innerHeight / 2;
+		const step = speed * dtMs / 1000;
+		const dist = targetCenter - current;
+		if (dist <= step) {
+			SC.overlayScreenY = targetCenter;
+			applyOverlayTop();
 			SC.overlayEndAnimId = null;
+		} else {
+			SC.overlayScreenY = current + step;
+			applyOverlayTop();
+			SC.overlayEndAnimId = requestAnimationFrame(animStep);
 		}
 	}
 	SC.overlayEndAnimId = requestAnimationFrame(animStep);
@@ -1069,7 +1090,11 @@ function startPlay() {
 		SC.btnPlay.classList.toggle('cw-playing', true);
 	}
 	if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
-	SC.overlayScreenY = SC.sx - window.scrollY + SC.overlayHighlightH / 2;
+	SC.overlayPhase = shouldStartFromMarker ? 'start-to-center' : 'center';
+	SC.overlayPrevScrollY = window.scrollY;
+	SC.overlayScreenY = shouldStartFromMarker
+		? SC.sx - window.scrollY + SC.overlayHighlightH / 2
+		: window.innerHeight / 2;
 	updateFocusOverlayGeometry();
 	setFocusOverlayActive(true);
 	updatePlayingStatusText();
