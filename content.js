@@ -819,8 +819,10 @@ function stepOverlayScreenY(targetY, dtMs) {
 
 function startOverlayEndAnimation(durationMs) {
 	if (SC.overlayEndAnimId) cancelAnimationFrame(SC.overlayEndAnimId);
+	const lineH = estimateLineHeightPx();
+	const endOffsetPx = lineH * 2;
 	const exScreenY = SC.ex - window.scrollY;
-	const targetCenter = exScreenY - SC.overlayHighlightH / 2;
+	const targetCenter = exScreenY - endOffsetPx - SC.overlayHighlightH / 2;
 	const startCenter = SC.overlayScreenY !== null ? SC.overlayScreenY : window.innerHeight / 2;
 	const totalDist = targetCenter - startCenter;
 	if (totalDist <= 0 || durationMs < 50) {
