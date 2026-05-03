@@ -20,6 +20,7 @@ const EDGE_MAX = 720;
 const SPEED_NUDGE = 0.05;
 const FOCUS_OVERLAY_MIN_LINES = 4;
 const FOCUS_OVERLAY_MIN_SCROLL_PX = 72;
+const OVERLAY_MOVE_PX_PER_S = 200;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
 }
@@ -220,6 +221,9 @@ const SC = /** @type {Record<string, any>} */ ({
 	queryPairEl: null,
 	focusOverlayEl: null,
 	highlightEnabled: false,
+	overlayScreenY: null,
+	overlayHighlightH: 140,
+	overlayEndAnimId: null,
 });
 
 function loadUiVisibleState() {
@@ -498,9 +502,11 @@ function stopPlay(msg, options) {
 	SC.virtualScrollY = 0;
 	SC.rewindPending = reachedEnd;
 	if (reachedEnd) {
-		updateFocusOverlayGeometry(SC.ex - window.scrollY);
 		setFocusOverlayActive(true);
+		startOverlayEndAnimation();
 	} else {
+		if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
+		SC.overlayScreenY = null;
 		setFocusOverlayActive(false);
 	}
 	if (typeof msg === 'string' && SC.statusEl) {
@@ -540,6 +546,8 @@ function frame(nowMs) {
 
 	if (nowMs < (SC.userScrollOverrideUntilMs || 0)) {
 		SC.virtualScrollY = window.scrollY;
+		stepOverlayScreenY(window.innerHeight / 2, dtMs);
+		applyOverlayTop();
 		updatePlayingStatusText();
 		if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 		SC.frame = requestAnimationFrame(frame);
@@ -571,10 +579,10 @@ function frame(nowMs) {
 			// スクロールが必要な行に到達 → 本編へ移行（fall through）
 			SC.phase = 'main';
 			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
-			updateFocusOverlayGeometry();
 		} else {
 			// まだ初期表示範囲内 → スクロールなし
-			updateFocusOverlayGeometry(SC.sx - window.scrollY);
+			stepOverlayScreenY(SC.sx - window.scrollY, dtMs);
+			applyOverlayTop();
 			updatePlayingStatusText();
 			if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 			SC.frame = requestAnimationFrame(frame);
@@ -586,6 +594,8 @@ function frame(nowMs) {
 	if (!SC.hasScrollStarted) SC.hasScrollStarted = true;
 	const u = SC.elapsed / SC.ms;
 	scrollToProg(u, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
+	stepOverlayScreenY(window.innerHeight / 2, dtMs);
+	applyOverlayTop();
 	updatePlayingStatusText();
 	if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 
@@ -737,11 +747,7 @@ function onResizeLayout() {
 	}
 	refreshVarCurve();
 	placeMarkers();
-	if (SC.playing && SC.phase === 'lead-in') {
-		updateFocusOverlayGeometry(SC.sx - window.scrollY);
-	} else {
-		updateFocusOverlayGeometry();
-	}
+	updateFocusOverlayGeometry();
 	setFocusOverlayActive(SC.playing);
 }
 
@@ -761,18 +767,60 @@ function estimateLineHeightPx() {
 	return heights[Math.floor(heights.length / 2)] || 28;
 }
 
-function updateFocusOverlayGeometry(targetScreenY) {
+function updateFocusOverlayGeometry() {
 	if (!(SC.focusOverlayEl instanceof Element)) return;
 	const lineHeight = estimateLineHeightPx();
 	const highlightH = clamp(Math.round(lineHeight * 11), 120, Math.max(140, window.innerHeight - 80));
+	SC.overlayHighlightH = highlightH;
 	let top;
-	if (typeof targetScreenY === 'number') {
-		top = clamp(Math.round(targetScreenY - highlightH / 2), 0, Math.max(0, window.innerHeight - highlightH));
+	if (typeof SC.overlayScreenY === 'number') {
+		top = clamp(Math.round(SC.overlayScreenY - highlightH / 2), 0, Math.max(0, window.innerHeight - highlightH));
 	} else {
 		top = Math.max(0, Math.round((window.innerHeight - highlightH) / 2));
 	}
 	SC.focusOverlayEl.style.setProperty('--cw-focus-top', top + 'px');
 	SC.focusOverlayEl.style.setProperty('--cw-focus-h', highlightH + 'px');
+}
+
+function applyOverlayTop() {
+	if (!(SC.focusOverlayEl instanceof Element)) return;
+	if (typeof SC.overlayScreenY !== 'number') return;
+	const h = SC.overlayHighlightH || 140;
+	const top = clamp(Math.round(SC.overlayScreenY - h / 2), 0, Math.max(0, window.innerHeight - h));
+	SC.focusOverlayEl.style.setProperty('--cw-focus-top', top + 'px');
+}
+
+function stepOverlayScreenY(targetY, dtMs) {
+	if (typeof SC.overlayScreenY !== 'number') {
+		SC.overlayScreenY = targetY;
+		return;
+	}
+	const maxStep = OVERLAY_MOVE_PX_PER_S * dtMs / 1000;
+	const dist = targetY - SC.overlayScreenY;
+	if (Math.abs(dist) <= maxStep) {
+		SC.overlayScreenY = targetY;
+	} else {
+		SC.overlayScreenY += Math.sign(dist) * maxStep;
+	}
+}
+
+function startOverlayEndAnimation() {
+	if (SC.overlayEndAnimId) cancelAnimationFrame(SC.overlayEndAnimId);
+	let prevMs = null;
+	function animStep(nowMs) {
+		if (prevMs === null) prevMs = nowMs;
+		const dtMs = clamp(nowMs - prevMs, 0, 120);
+		prevMs = nowMs;
+		const targetY = SC.ex - window.scrollY;
+		stepOverlayScreenY(targetY, dtMs);
+		applyOverlayTop();
+		if (Math.abs(SC.overlayScreenY - targetY) > 0.5) {
+			SC.overlayEndAnimId = requestAnimationFrame(animStep);
+		} else {
+			SC.overlayEndAnimId = null;
+		}
+	}
+	SC.overlayEndAnimId = requestAnimationFrame(animStep);
 }
 
 function countLinesInMarkerRange() {
@@ -1020,11 +1068,9 @@ function startPlay() {
 		SC.btnPlay.textContent = '停止';
 		SC.btnPlay.classList.toggle('cw-playing', true);
 	}
-	if (SC.phase === 'lead-in') {
-		updateFocusOverlayGeometry(SC.sx - window.scrollY);
-	} else {
-		updateFocusOverlayGeometry();
-	}
+	if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
+	SC.overlayScreenY = SC.sx - window.scrollY;
+	updateFocusOverlayGeometry();
 	setFocusOverlayActive(true);
 	updatePlayingStatusText();
 	SC.frame = requestAnimationFrame(frame);
