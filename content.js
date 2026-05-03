@@ -581,7 +581,7 @@ function frame(nowMs) {
 			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
 		} else {
 			// まだ初期表示範囲内 → スクロールなし
-			stepOverlayScreenY(SC.sx - window.scrollY, dtMs);
+			stepOverlayScreenY(SC.sx - window.scrollY + SC.overlayHighlightH / 2, dtMs);
 			applyOverlayTop();
 			updatePlayingStatusText();
 			if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
@@ -1069,7 +1069,7 @@ function startPlay() {
 		SC.btnPlay.classList.toggle('cw-playing', true);
 	}
 	if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
-	SC.overlayScreenY = SC.sx - window.scrollY;
+	SC.overlayScreenY = SC.sx - window.scrollY + SC.overlayHighlightH / 2;
 	updateFocusOverlayGeometry();
 	setFocusOverlayActive(true);
 	updatePlayingStatusText();
