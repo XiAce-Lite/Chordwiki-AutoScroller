@@ -497,7 +497,12 @@ function stopPlay(msg, options) {
 	SC.userScrollOverrideUntilMs = 0;
 	SC.virtualScrollY = 0;
 	SC.rewindPending = reachedEnd;
-	setFocusOverlayActive(false);
+	if (reachedEnd) {
+		updateFocusOverlayGeometry(SC.ex - window.scrollY);
+		setFocusOverlayActive(true);
+	} else {
+		setFocusOverlayActive(false);
+	}
 	if (typeof msg === 'string' && SC.statusEl) {
 		SC.statusEl.textContent = msg;
 		SC.statusEl.dataset.tone = 'info';
@@ -566,9 +571,10 @@ function frame(nowMs) {
 			// スクロールが必要な行に到達 → 本編へ移行（fall through）
 			SC.phase = 'main';
 			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
-			setFocusOverlayActive(true);
+			updateFocusOverlayGeometry();
 		} else {
 			// まだ初期表示範囲内 → スクロールなし
+			updateFocusOverlayGeometry(SC.sx - window.scrollY);
 			updatePlayingStatusText();
 			if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 			SC.frame = requestAnimationFrame(frame);
@@ -624,7 +630,7 @@ function setMarkerXY(which, docY, persist) {
 	}
 	refreshVarCurve();
 	placeMarkers();
-	setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
+	setFocusOverlayActive(SC.playing);
 	if (persist) {
 		saveState();
 		setStatus('マーカーを保存しました', 'success');
@@ -731,8 +737,12 @@ function onResizeLayout() {
 	}
 	refreshVarCurve();
 	placeMarkers();
-	updateFocusOverlayGeometry();
-	setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
+	if (SC.playing && SC.phase === 'lead-in') {
+		updateFocusOverlayGeometry(SC.sx - window.scrollY);
+	} else {
+		updateFocusOverlayGeometry();
+	}
+	setFocusOverlayActive(SC.playing);
 }
 
 function estimateLineHeightPx() {
@@ -751,11 +761,16 @@ function estimateLineHeightPx() {
 	return heights[Math.floor(heights.length / 2)] || 28;
 }
 
-function updateFocusOverlayGeometry() {
+function updateFocusOverlayGeometry(targetScreenY) {
 	if (!(SC.focusOverlayEl instanceof Element)) return;
 	const lineHeight = estimateLineHeightPx();
 	const highlightH = clamp(Math.round(lineHeight * 11), 120, Math.max(140, window.innerHeight - 80));
-	const top = Math.max(0, Math.round((window.innerHeight - highlightH) / 2));
+	let top;
+	if (typeof targetScreenY === 'number') {
+		top = clamp(Math.round(targetScreenY - highlightH / 2), 0, Math.max(0, window.innerHeight - highlightH));
+	} else {
+		top = Math.max(0, Math.round((window.innerHeight - highlightH) / 2));
+	}
 	SC.focusOverlayEl.style.setProperty('--cw-focus-top', top + 'px');
 	SC.focusOverlayEl.style.setProperty('--cw-focus-h', highlightH + 'px');
 }
@@ -939,7 +954,7 @@ function resetMarkersUi() {
 	SC.ex = SC.dey;
 	refreshVarCurve();
 	placeMarkers();
-	setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
+	setFocusOverlayActive(SC.playing);
 	saveState();
 	setStatus('マーカーを既定位置へ', 'info');
 }
@@ -1005,8 +1020,12 @@ function startPlay() {
 		SC.btnPlay.textContent = '停止';
 		SC.btnPlay.classList.toggle('cw-playing', true);
 	}
-	updateFocusOverlayGeometry();
-	setFocusOverlayActive(SC.phase !== 'lead-in');
+	if (SC.phase === 'lead-in') {
+		updateFocusOverlayGeometry(SC.sx - window.scrollY);
+	} else {
+		updateFocusOverlayGeometry();
+	}
+	setFocusOverlayActive(true);
 	updatePlayingStatusText();
 	SC.frame = requestAnimationFrame(frame);
 	saveState();
