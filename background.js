@@ -5,6 +5,7 @@
 
 const STORAGE_OPTIONS_KEY = 'cw_autoscroller_options';
 const STORAGE_SESSION_SPEED_KEY = 'cw_autoscroller_session_speed';
+const STORAGE_EXTENSION_ENABLED_KEY = 'cw_autoscroller_enabled';
 const CHORDWIKI_HOSTNAME = 'ja.chordwiki.org';
 
 const DEFAULT_OPTIONS = {
@@ -15,7 +16,7 @@ const DEFAULT_DURATION_MS = 240_000;
 
 /** MusicBrainz requires a descriptive User-Agent. */
 const MUSICBRAINZ_USER_AGENT =
-	'Chordwiki-AutoScroller/1.0.52 (https://github.com/)';
+	'Chordwiki-AutoScroller/1.0.53 (https://github.com/)';
 
 // -----------------------------------------------------------------------------
 // Options
@@ -51,6 +52,17 @@ async function setSessionScrollSpeed(value) {
 		typeof value === 'number' && Number.isFinite(value) ? Math.min(3, Math.max(0.25, value)) : 1.0;
 	await chrome.storage.session.set({ [STORAGE_SESSION_SPEED_KEY]: speed });
 	return speed;
+}
+
+async function getExtensionEnabled() {
+	const data = await chrome.storage.sync.get(STORAGE_EXTENSION_ENABLED_KEY);
+	return data[STORAGE_EXTENSION_ENABLED_KEY] !== false;
+}
+
+async function setExtensionEnabled(enabled) {
+	const next = enabled !== false;
+	await chrome.storage.sync.set({ [STORAGE_EXTENSION_ENABLED_KEY]: next });
+	return next;
 }
 
 // -----------------------------------------------------------------------------
@@ -261,6 +273,9 @@ async function getActiveChordwikiTabId() {
 }
 
 async function relayStartScroll() {
+	if (!(await getExtensionEnabled())) {
+		return;
+	}
 	const tabId = await getActiveChordwikiTabId();
 	if (tabId == null) {
 		return;
@@ -274,6 +289,9 @@ async function relayStartScroll() {
 }
 
 async function relayStopScroll() {
+	if (!(await getExtensionEnabled())) {
+		return;
+	}
 	const tabId = await getActiveChordwikiTabId();
 	if (tabId == null) {
 		return;
@@ -286,6 +304,9 @@ async function relayStopScroll() {
 }
 
 async function relayAdjustSpeed(value) {
+	if (!(await getExtensionEnabled())) {
+		return;
+	}
 	const speed = await setSessionScrollSpeed(value);
 	const tabId = await getActiveChordwikiTabId();
 	if (tabId == null) {
@@ -299,6 +320,9 @@ async function relayAdjustSpeed(value) {
 }
 
 async function toggleUiOnActiveSongTab() {
+	if (!(await getExtensionEnabled())) {
+		return;
+	}
 	const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
 	const tab = tabs[0];
 	if (tab?.id == null || !isChordwikiSongPageUrl(tab.url)) {
@@ -312,6 +336,20 @@ async function toggleUiOnActiveSongTab() {
 	}
 }
 
+async function broadcastExtensionEnabled(enabled) {
+	const tabs = await chrome.tabs.query({});
+	for (const tab of tabs) {
+		if (tab?.id == null || !isChordwikiUrl(tab.url)) {
+			continue;
+		}
+		try {
+			await chrome.tabs.sendMessage(tab.id, { type: 'setExtensionEnabled', enabled });
+		} catch {
+			// ignore: no receiver or tab not ready
+		}
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Message router
 // -----------------------------------------------------------------------------
@@ -322,6 +360,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	}
 
 	switch (message.type) {
+		case 'getExtensionEnabled':
+			getExtensionEnabled()
+				.then((enabled) => sendResponse({ ok: true, enabled }))
+				.catch(() => sendResponse({ ok: true, enabled: true }));
+			return true;
+
+		case 'setExtensionEnabled':
+			setExtensionEnabled(message.enabled)
+				.then((enabled) => broadcastExtensionEnabled(enabled).then(() => enabled))
+				.then((enabled) => sendResponse({ ok: true, enabled }))
+				.catch(() => sendResponse({ ok: false }));
+			return true;
+
+		case 'toggleExtensionEnabled':
+			getExtensionEnabled()
+				.then((enabled) => setExtensionEnabled(!enabled))
+				.then((enabled) => broadcastExtensionEnabled(enabled).then(() => enabled))
+				.then((enabled) => sendResponse({ ok: true, enabled }))
+				.catch(() => sendResponse({ ok: false }));
+			return true;
+
 		case 'getDuration':
 			handleGetDuration(message, sender, sendResponse);
 			return true;
@@ -356,6 +415,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 		case 'adjustSpeed':
 			relayAdjustSpeed(message.value).then(() => sendResponse({ ok: true }));
+			return true;
+
+		case 'toggleUiVisibility':
+			toggleUiOnActiveSongTab().then(() => sendResponse({ ok: true }));
 			return true;
 
 		default:

@@ -23,10 +23,28 @@
   .section {
     margin-bottom: 16px;
   }
+	#toggle {
+		width: 100%;
+		padding: 10px 12px;
+		border: 1px solid #c4d4e4;
+		border-radius: 10px;
+		background: #eef6ff;
+		color: #0f4c81;
+		font-weight: 700;
+		cursor: pointer;
+	}
+	#toggle[data-state="off"] {
+		background: #f2f4f7;
+		color: #475467;
+	}
+	#toggle[disabled] {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
 </style>
 </head>
 <body>
-<button id="toggle">AutoScroll ON/OFF</button>
+<button id="toggle" type="button" data-state="off">読み込み中...</button>
 <hr>
 <h1>AutoScroller ヘルプ</h1>
 
@@ -101,8 +119,9 @@
 
 <div class="section">
   <h2>バージョン情報</h2>
-  <p>AutoScroller v1.0.52</p>
+  <p>AutoScroller v1.0.53</p>
 </div>
 
 </body>
+<script src="popup.js"></script>
 </html>

@@ -3,6 +3,7 @@
 const DEFAULT_DURATION_MS = 240000;
 const STORAGE_NS = 'cw_as_v10';
 const STORAGE_UI_VISIBLE_KEY = 'cw_ui_visible';
+const STORAGE_EXTENSION_ENABLED_KEY = 'cw_autoscroller_enabled';
 const STORAGE_UI_POS_KEY = 'cw_ui_pos';
 const STORAGE_UI_COLLAPSED_KEY = 'cw_ui_collapsed';
 const MARKER_MODEL = 'p-line-v1';
@@ -229,6 +230,7 @@ const SC = /** @type {Record<string, any>} */ ({
 	overlayPrevScrollY: 0,
 	apiDurationMs: null,
 	endCountdownTimerId: 0,
+	extensionEnabled: true,
 });
 
 function loadUiVisibleState() {
@@ -246,6 +248,34 @@ function saveUiVisibleState(visible) {
 	} catch (e) {
 		void e;
 	}
+}
+
+function applyExtensionEnabledState(enabled, options) {
+	SC.extensionEnabled = enabled !== false;
+	if (!SC.extensionEnabled) {
+		stopEndCountdownDisplay();
+		if (SC.playing) {
+			stopPlay(options?.silent ? undefined : '拡張機能をOFFにしました');
+		} else {
+			if (SC.overlayEndAnimId) {
+				cancelAnimationFrame(SC.overlayEndAnimId);
+				SC.overlayEndAnimId = null;
+			}
+			if (SC.focusOverlayEl instanceof Element) {
+				SC.focusOverlayEl.style.display = 'none';
+			}
+		}
+		if (SC.uiRoot) SC.uiRoot.style.display = 'none';
+		if (SC.mLay) SC.mLay.style.display = 'none';
+		return;
+	}
+	if (SC.uiRoot) {
+		SC.uiRoot.style.display = SC.uiVisible ? '' : 'none';
+	}
+	if (SC.mLay) {
+		SC.mLay.style.display = SC.uiVisible ? '' : 'none';
+	}
+	setFocusOverlayActive(SC.playing);
 }
 
 function applyDefaults() {
@@ -1156,6 +1186,7 @@ function startPlay() {
 }
 
 function togglePlay() {
+	if (!SC.extensionEnabled) return;
 	if (SC.playing) {
 		stopPlay('停止しました');
 	} else {
@@ -1171,6 +1202,7 @@ function scrollBackToStartByClick() {
 }
 
 function handlePrimarySheetClick(ev) {
+	if (!SC.extensionEnabled) return;
 	if (ev.defaultPrevented || ev.button !== 0) return;
 	if (!(ev.target instanceof Element)) return;
 
@@ -1193,12 +1225,12 @@ function handlePrimarySheetClick(ev) {
 function setUiVisibility(visible) {
 	SC.uiVisible = visible !== false;
 	if (SC.uiRoot) {
-		SC.uiRoot.style.display = SC.uiVisible ? '' : 'none';
+		SC.uiRoot.style.display = SC.uiVisible && SC.extensionEnabled ? '' : 'none';
 	}
 	if (SC.mLay) {
-		SC.mLay.style.display = SC.uiVisible ? '' : 'none';
+		SC.mLay.style.display = SC.uiVisible && SC.extensionEnabled ? '' : 'none';
 	}
-	setFocusOverlayActive(SC.playing);
+	setFocusOverlayActive(SC.playing && SC.extensionEnabled);
 	saveUiVisibleState(SC.uiVisible);
 }
 
@@ -1512,6 +1544,7 @@ function mountUi() {
 	});
 
 	window.addEventListener('scroll', () => {
+		if (!SC.extensionEnabled) return;
 		placeMarkers();
 		if (
 			SC.playing
@@ -1530,7 +1563,7 @@ function mountUi() {
 	window.addEventListener(
 		'wheel',
 		(ev) => {
-			if (!SC.playing || ev.defaultPrevented || ev.ctrlKey || ev.metaKey) return;
+			if (!SC.extensionEnabled || !SC.playing || ev.defaultPrevented || ev.ctrlKey || ev.metaKey) return;
 			const dy = Number(ev.deltaY) || 0;
 			if (Math.abs(dy) < 4) return;
 			const steps = Math.min(4, Math.max(1, Math.round(Math.abs(dy) / 72)));
@@ -1605,7 +1638,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 			source: SC.src,
 			formatted: fmtDur(SC.ms),
 			playing: SC.playing,
+			enabled: SC.extensionEnabled,
 		});
+		return true;
+	}
+	if (msg?.type === 'getExtensionEnabled') {
+		sendResponse({ ok: true, enabled: SC.extensionEnabled });
+		return true;
+	}
+	if (msg?.type === 'setExtensionEnabled') {
+		applyExtensionEnabledState(msg.enabled, { silent: false });
+		sendResponse({ ok: true, enabled: SC.extensionEnabled });
 		return true;
 	}
 	if (msg?.type === 'getDurationFromContent') {
@@ -1617,6 +1660,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		return true;
 	}
 	if (msg?.type === 'startAutoScroll') {
+		if (!SC.extensionEnabled) {
+			sendResponse({ ok: false, reason: 'disabled' });
+			return true;
+		}
 		if (typeof msg.speed === 'number') {
 			SC.spd = clamp(msg.speed, SP_MIN, SP_MAX);
 			syncSpeedUi();
@@ -1629,11 +1676,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		return true;
 	}
 	if (msg?.type === 'stopAutoScroll') {
+		if (!SC.extensionEnabled) {
+			sendResponse({ ok: false, reason: 'disabled' });
+			return true;
+		}
 		stopPlay('停止しました');
 		sendResponse({ ok: true });
 		return true;
 	}
 	if (msg?.type === 'setScrollSpeed') {
+		if (!SC.extensionEnabled) {
+			sendResponse({ ok: false, reason: 'disabled' });
+			return true;
+		}
 		SC.spd = clamp(Number(msg.speed) || 1, SP_MIN, SP_MAX);
 		syncSpeedUi();
 		saveState();
@@ -1641,6 +1696,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		return true;
 	}
 	if (msg?.type === 'toggleUiVisibility') {
+		if (!SC.extensionEnabled) {
+			sendResponse({ ok: false, reason: 'disabled' });
+			return true;
+		}
 		if (!SC.isSongPage) {
 			sendResponse({ ok: false, reason: 'notSongPage' });
 			return true;
@@ -1652,6 +1711,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	if (msg?.type === 'durationDebugUrl') {
 		showDurationDebugUrl(msg.provider, msg.url);
 		sendResponse({ ok: true });
+		return true;
+	}
+	if (msg?.type === 'getUiVisibility') {
+		sendResponse({ ok: true, visible: SC.uiVisible && SC.extensionEnabled });
 		return true;
 	}
 	return false;
@@ -1669,9 +1732,13 @@ function init() {
 	SC.queryTitle = String(t || '');
 	SC.queryArtist = String(a || '');
 	updateQueryPairDisplay();
-	if (t && a) {
-		fetchRemoteDuration(t, a);
-	}
+	chrome.storage.sync.get(STORAGE_EXTENSION_ENABLED_KEY, (data) => {
+		const enabled = data?.[STORAGE_EXTENSION_ENABLED_KEY] !== false;
+		applyExtensionEnabledState(enabled, { silent: true });
+		if (enabled && t && a) {
+			fetchRemoteDuration(t, a);
+		}
+	});
 }
 
 if (document.readyState === 'loading') {
@@ -1679,9 +1746,3 @@ if (document.readyState === 'loading') {
 } else {
 	init();
 }
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === 'toggle-autoscroll') {
-        togglePlay();  // ← 今まで action.onClicked で呼んでいた関数
-    }
-});

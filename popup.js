@@ -1,86 +1,43 @@
 'use strict';
 
-function formatSource(src) {
-	const m = { itunes: 'iTunes', musicbrainz: 'MusicBrainz', default: '該当なし', none: '' };
-	return m[src] || '';
+function setToggleUi(btn, state) {
+	if (!(btn instanceof HTMLButtonElement)) return;
+	btn.disabled = false;
+	if (state === 'on') {
+		btn.dataset.state = 'on';
+		btn.textContent = '拡張機能: ON（クリックでOFF）';
+		return;
+	}
+	btn.dataset.state = 'off';
+	btn.textContent = '拡張機能: OFF（クリックでON）';
 }
 
-function queryActiveChordwikiTab(cb) {
-	chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-		const tab = tabs[0];
-		let ok = false;
-		try {
-			const u = new URL(tab?.url || '');
-			ok = u.hostname === 'ja.chordwiki.org' && u.pathname.startsWith('/wiki/');
-		} catch {
-			ok = false;
-		}
-		cb(tab?.id, ok);
-	});
-}
-
-function refreshDuration() {
-	const el = document.getElementById('popup-duration');
-	const srcEl = document.getElementById('popup-source');
-	queryActiveChordwikiTab((tabId, ok) => {
-		if (!ok || tabId == null) {
-			el.textContent = '--:--';
-			if (srcEl) srcEl.textContent = '';
+function refreshToggleState(btn) {
+	chrome.runtime.sendMessage({ type: 'getExtensionEnabled' }, (resp) => {
+		if (chrome.runtime.lastError || !resp || resp.ok !== true) {
+			setToggleUi(btn, 'off');
 			return;
 		}
-		chrome.tabs.sendMessage(tabId, { type: 'getPlaybackSnapshot' }, (r) => {
-			if (chrome.runtime.lastError || !r) {
-				el.textContent = '--:--';
-				if (srcEl) srcEl.textContent = '';
-				return;
-			}
-			el.textContent = r.formatted || '--:--';
-			if (srcEl) srcEl.textContent = formatSource(r.source);
-		});
+		setToggleUi(btn, resp.enabled ? 'on' : 'off');
 	});
-}
-
-function clampSpeed(s) {
-	return Math.min(3, Math.max(0.25, s));
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-	const spdRange = document.getElementById('popup-speed');
-	const spdVal = document.getElementById('popup-speed-val');
+	const btn = document.getElementById('toggle');
+	if (!(btn instanceof HTMLButtonElement)) return;
 
-	function showSpeed(v) {
-		const x = typeof v === 'number' && Number.isFinite(v) ? v : parseFloat(spdRange.value);
-		spdVal.textContent = (Number.isFinite(x) ? x : 1).toFixed(2) + 'x';
-	}
+	refreshToggleState(btn);
 
-	const sessApi = chrome.storage?.session;
-	if (sessApi?.get) {
-		sessApi.get(['cw_autoscroller_session_speed'], (data) => {
-			const v = data.cw_autoscroller_session_speed;
-			if (typeof v === 'number' && v > 0) {
-				spdRange.value = String(clampSpeed(v));
-				showSpeed(v);
+	btn.addEventListener('click', () => {
+		btn.disabled = true;
+		chrome.runtime.sendMessage({ type: 'toggleExtensionEnabled' }, (resp) => {
+			if (chrome.runtime.lastError || !resp || resp.ok !== true) {
+				btn.disabled = false;
+				refreshToggleState(btn);
+				return;
 			}
+			setToggleUi(btn, resp.enabled ? 'on' : 'off');
+			btn.disabled = false;
 		});
-	}
-
-	spdRange.addEventListener('input', () => {
-		const v = clampSpeed(parseFloat(spdRange.value));
-		showSpeed(v);
-		chrome.runtime.sendMessage({ type: 'adjustSpeed', value: v }, () => void chrome.runtime.lastError);
 	});
-
-	document.getElementById('popup-start').addEventListener('click', () => {
-		chrome.runtime.sendMessage({ type: 'startScroll' }, () => void chrome.runtime.lastError);
-	});
-	document.getElementById('popup-stop').addEventListener('click', () => {
-		chrome.runtime.sendMessage({ type: 'stopScroll' }, () => void chrome.runtime.lastError);
-	});
-
-	document.getElementById('popup-toggle').addEventListener('click', () => {
-		chrome.runtime.sendMessage({ type: 'toggle-autoscroll' }, () => void chrome.runtime.lastError);
-	});
-
-	showSpeed(parseFloat(spdRange.value));
-	refreshDuration();
 });
