@@ -77,6 +77,10 @@ document.addEventListener('DOMContentLoaded', () => {
 		chrome.runtime.sendMessage({ type: 'stopScroll' }, () => void chrome.runtime.lastError);
 	});
 
+	document.getElementById('popup-toggle').addEventListener('click', () => {
+		chrome.runtime.sendMessage({ type: 'toggle-autoscroll' }, () => void chrome.runtime.lastError);
+	});
+
 	showSpeed(parseFloat(spdRange.value));
 	refreshDuration();
 });

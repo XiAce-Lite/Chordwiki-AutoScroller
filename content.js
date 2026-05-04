@@ -256,7 +256,7 @@ function applyDefaults() {
 	const topLines = sheetLines(sh);
 	if (topLines.length) {
 		const r0 = topLines[0].getBoundingClientRect();
-		SC.dsy = Math.round(r0.top + window.scrollY - (r0.height * 0.5));
+		SC.dsy = Math.round(r0.top + window.scrollY - (r0.height * 1.0));
 	}
 	const chordPLines = [...sh.querySelectorAll('p.line')].filter((lineEl) =>
 		lineEl instanceof HTMLParagraphElement && lineEl.querySelector('span.chord')
@@ -1679,3 +1679,9 @@ if (document.readyState === 'loading') {
 } else {
 	init();
 }
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === 'toggle-autoscroll') {
+        togglePlay();  // ← 今まで action.onClicked で呼んでいた関数
+    }
+});
