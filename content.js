@@ -21,6 +21,7 @@ const SPEED_NUDGE = 0.05;
 const FOCUS_OVERLAY_MIN_LINES = 4;
 const FOCUS_OVERLAY_MIN_SCROLL_PX = 72;
 const OVERLAY_END_LINE_INTERVAL_MS = 400;
+const END_COUNTDOWN_TICK_MS = 120;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
 }
@@ -226,6 +227,8 @@ const SC = /** @type {Record<string, any>} */ ({
 	overlayEndAnimId: null,
 	overlayPhase: 'center',
 	overlayPrevScrollY: 0,
+	apiDurationMs: null,
+	endCountdownTimerId: 0,
 });
 
 function loadUiVisibleState() {
@@ -253,7 +256,7 @@ function applyDefaults() {
 	const topLines = sheetLines(sh);
 	if (topLines.length) {
 		const r0 = topLines[0].getBoundingClientRect();
-		SC.dsy = Math.round(r0.top + window.scrollY);
+		SC.dsy = Math.round(r0.top + window.scrollY - (r0.height * 0.5));
 	}
 	const chordPLines = [...sh.querySelectorAll('p.line')].filter((lineEl) =>
 		lineEl instanceof HTMLParagraphElement && lineEl.querySelector('span.chord')
@@ -487,9 +490,39 @@ function scrollToProg(u, focusRatio) {
 	SC.virtualScrollY = targetY;
 }
 
+function stopEndCountdownDisplay() {
+	if (SC.endCountdownTimerId) {
+		clearInterval(SC.endCountdownTimerId);
+		SC.endCountdownTimerId = 0;
+	}
+}
+
+function startEndCountdownDisplay(remainingMs, speedFactor) {
+	stopEndCountdownDisplay();
+	const remainStart = Math.max(0, Number(remainingMs) || 0);
+	const sp = clamp(Number(speedFactor) || 1, SP_MIN, SP_MAX);
+	if (!SC.remainEl) return;
+	if (remainStart <= 0) {
+		SC.remainEl.textContent = fmtDur(0);
+		return;
+	}
+	const startedAt = performance.now();
+	SC.remainEl.textContent = fmtDur(remainStart);
+	SC.endCountdownTimerId = setInterval(() => {
+		const elapsedMs = Math.max(0, performance.now() - startedAt);
+		const remainNow = Math.max(0, remainStart - elapsedMs * sp);
+		if (SC.remainEl) SC.remainEl.textContent = fmtDur(remainNow);
+		if (remainNow <= 0) {
+			stopEndCountdownDisplay();
+		}
+	}, END_COUNTDOWN_TICK_MS);
+}
+
 function stopPlay(msg, options) {
 	const reachedEnd = options?.reachedEnd === true;
 	const remainingMs = Math.max(0, SC.ms - SC.elapsed);
+	const speedFactorAtStop = clamp(SC.spd || 1, SP_MIN, SP_MAX);
+	stopEndCountdownDisplay();
 	if (SC.frame) {
 		cancelAnimationFrame(SC.frame);
 		SC.frame = null;
@@ -507,6 +540,7 @@ function stopPlay(msg, options) {
 	if (reachedEnd) {
 		setFocusOverlayActive(true);
 		startOverlayEndAnimation(remainingMs);
+		startEndCountdownDisplay(remainingMs, speedFactorAtStop);
 	} else {
 		if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
 		SC.overlayScreenY = null;
@@ -520,7 +554,7 @@ function stopPlay(msg, options) {
 		SC.btnPlay.textContent = '開始';
 		SC.btnPlay.classList.toggle('cw-playing', false);
 	}
-	if (SC.remainEl) {
+	if (!reachedEnd && SC.remainEl) {
 		SC.remainEl.textContent = fmtDur(SC.ms);
 	}
 }
@@ -1107,6 +1141,7 @@ function startPlay() {
 		SC.btnPlay.textContent = '停止';
 		SC.btnPlay.classList.toggle('cw-playing', true);
 	}
+	stopEndCountdownDisplay();
 	if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
 	SC.overlayPhase = shouldStartFromMarker ? 'start-to-center' : 'center';
 	SC.overlayPrevScrollY = window.scrollY;
@@ -1420,7 +1455,7 @@ function mountUi() {
 	}
 
 	root.querySelector('#cw-reset-time').addEventListener('click', () => {
-		SC.ms = DEFAULT_DURATION_MS;
+		SC.ms = typeof SC.apiDurationMs === 'number' ? SC.apiDurationMs : DEFAULT_DURATION_MS;
 		syncDurationInputs();
 		applyDurationFromInputs(true);
 	});
@@ -1539,6 +1574,8 @@ function fetchRemoteDuration(title, artist) {
 		if (chrome.runtime.lastError || !resp || resp.type !== 'durationResult') return;
 		const ms = typeof resp.duration === 'number' ? resp.duration : DEFAULT_DURATION_MS;
 		const src = resp.source || 'default';
+		const hasApiDuration = src !== 'default' && !resp.unavailable;
+		SC.apiDurationMs = hasApiDuration ? Math.max(1000, ms) : null;
 		if (hasSavedMs) {
 			SC.src = src;
 			syncDurationInputs();
