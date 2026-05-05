@@ -11,7 +11,6 @@ const MAX_MINUTES = 99;
 const SP_MIN = 0.5;
 const SP_MAX = 3;
 const FOCUS_RATIO = 0.42;
-const VARIABLE_FOCUS_RATIO_START = 0.2;
 const VARIABLE_FOCUS_RATIO_FINAL = 0.4;
 const VARIABLE_LEAD_IN_MS = 1000;
 const MANUAL_INTERACTION_HOLD_MS = 260;
@@ -21,7 +20,6 @@ const EDGE_MAX = 720;
 const SPEED_NUDGE = 0.05;
 const FOCUS_OVERLAY_MIN_LINES = 4;
 const FOCUS_OVERLAY_MIN_SCROLL_PX = 72;
-const OVERLAY_END_LINE_INTERVAL_MS = 400;
 const END_COUNTDOWN_TICK_MS = 120;
 const FOCUS_CONTEXT_LINES = 4;
 const FOCUS_CONTEXT_LINES_MIN = 2;
@@ -194,7 +192,7 @@ const SC = /** @type {Record<string, any>} */ ({
 	ms: DEFAULT_DURATION_MS,
 	src: 'default',
 	spd: 1,
-	variable: true,
+	variable: false,
 	varCurve: null,
 	elapsed: 0,
 	tPlay: 0,
@@ -216,8 +214,6 @@ const SC = /** @type {Record<string, any>} */ ({
 	userScrollOverrideUntilMs: 0,
 	hasScrollStarted: false,
 	phase: 'main',
-	phaseElapsedMs: 0,
-	focusRatioCurrent: VARIABLE_FOCUS_RATIO_FINAL,
 	playStartScrollY: 0,
 	virtualScrollY: 0,
 	debugQueryOutput: false,
@@ -575,8 +571,6 @@ function stopPlay(msg, options) {
 	SC.tPrev = 0;
 	SC.hasScrollStarted = false;
 	SC.phase = 'main';
-	SC.phaseElapsedMs = 0;
-	SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
 	SC.userScrollOverrideUntilMs = 0;
 	SC.virtualScrollY = 0;
 	SC.rewindPending = reachedEnd;
@@ -678,7 +672,6 @@ function frame(nowMs) {
 		if (targetY > SC.playStartScrollY + 2) {
 			// スクロールが必要な行に到達 → 本編へ移行（fall through）
 			SC.phase = 'main';
-			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
 		} else {
 			// まだ初期表示範囲内 → スクロールなし
 			SC.overlayPrevScrollY = window.scrollY;
@@ -911,10 +904,6 @@ function applyOverlayTop() {
 	SC.focusOverlayEl.style.setProperty('--cw-focus-top', top + 'px');
 }
 
-function stepOverlayScreenY(targetY, dtMs) {
-	void targetY; void dtMs; // legacy shim - no longer used in frame
-}
-
 function stopOverlayReleaseTimer() {
 	if (SC.overlayReleaseTimerId) {
 		clearTimeout(SC.overlayReleaseTimerId);
@@ -1134,14 +1123,6 @@ function sourceLabel(s) {
 	return map[s] || '';
 }
 
-function getVariableFocusRatio(elapsedMs) {
-	if (!SC.hasScrollStarted) {
-		return VARIABLE_FOCUS_RATIO_START;
-	}
-	const progress = clamp((Number(elapsedMs) || 0) / VARIABLE_LEAD_IN_MS, 0, 1);
-	return VARIABLE_FOCUS_RATIO_START + ((VARIABLE_FOCUS_RATIO_FINAL - VARIABLE_FOCUS_RATIO_START) * progress);
-}
-
 function updatePlayingStatusText() {
 	if (!SC.playing) {
 		return;
@@ -1296,19 +1277,13 @@ function startPlay() {
 			SC.virtualScrollY = leadInStartY;
 			SC.playStartScrollY = leadInStartY;
 			SC.phase = 'lead-in';
-			SC.phaseElapsedMs = 0;
-			SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
 		} else {
 			SC.phase = 'main';
-			SC.phaseElapsedMs = 0;
-			SC.focusRatioCurrent = FOCUS_RATIO;
 			scrollToProg(0, FOCUS_RATIO);
 			SC.playStartScrollY = SC.virtualScrollY;
 		}
 	} else {
 		SC.phase = 'main';
-		SC.phaseElapsedMs = 0;
-		SC.focusRatioCurrent = VARIABLE_FOCUS_RATIO_FINAL;
 		SC.hasScrollStarted = true;
 		SC.playStartScrollY = window.scrollY;
 		SC.virtualScrollY = window.scrollY;
@@ -1458,7 +1433,7 @@ function mountUi() {
 		'<button type="button" id="cw-play">開始</button>' +
 		'<button type="button" id="cw-reset-markers">↺ Marker</button>' +
 		'<div class="cw-toggle-stack">' +
-		'<label class="cw-var-toggle"><input type="checkbox" id="cw-variable" checked /><span>可変スクロール</span></label>' +
+		'<label class="cw-var-toggle"><input type="checkbox" id="cw-variable" /><span>可変スクロール</span></label>' +
 		'<label class="cw-hl-toggle"><input type="checkbox" id="cw-highlight" checked /><span>ハイライト表示</span></label>' +
 		'<label class="cw-ctx-lines-label"><span>前後</span><input type="number" id="cw-ctx-lines" min="2" max="6" step="1" value="4" inputmode="numeric" style="width:3em" /><span>行</span></label>' +
 		'</div>' +
