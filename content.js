@@ -23,6 +23,10 @@ const FOCUS_OVERLAY_MIN_LINES = 4;
 const FOCUS_OVERLAY_MIN_SCROLL_PX = 72;
 const OVERLAY_END_LINE_INTERVAL_MS = 400;
 const END_COUNTDOWN_TICK_MS = 120;
+const FOCUS_CONTEXT_LINES = 4;
+const FOCUS_CONTEXT_LINES_MIN = 2;
+const FOCUS_CONTEXT_LINES_MAX = 6;
+const OVERLAY_RELEASE_DELAY_MS = 2000;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
 }
@@ -222,7 +226,8 @@ const SC = /** @type {Record<string, any>} */ ({
 	queryArtist: '',
 	queryPairEl: null,
 	focusOverlayEl: null,
-	highlightEnabled: false,
+	highlightEnabled: true,
+	focusContextLines: FOCUS_CONTEXT_LINES,
 	overlayScreenY: null,
 	overlayHighlightH: 140,
 	overlayEndAnimId: null,
@@ -230,6 +235,7 @@ const SC = /** @type {Record<string, any>} */ ({
 	overlayPrevScrollY: 0,
 	apiDurationMs: null,
 	endCountdownTimerId: 0,
+	overlayReleaseTimerId: 0,
 	extensionEnabled: true,
 });
 
@@ -261,6 +267,7 @@ function applyExtensionEnabledState(enabled, options) {
 				cancelAnimationFrame(SC.overlayEndAnimId);
 				SC.overlayEndAnimId = null;
 			}
+			stopOverlayReleaseTimer();
 			if (SC.focusOverlayEl instanceof Element) {
 				SC.focusOverlayEl.style.display = 'none';
 			}
@@ -349,6 +356,7 @@ function saveState() {
 				spd: SC.spd,
 				variable: SC.variable ? 1 : 0,
 				highlight: SC.highlightEnabled ? 1 : 0,
+				focusContextLines: clamp(SC.focusContextLines || FOCUS_CONTEXT_LINES, FOCUS_CONTEXT_LINES_MIN, FOCUS_CONTEXT_LINES_MAX),
 			})
 		);
 	} catch (e) {
@@ -374,6 +382,8 @@ function restoreState() {
 		SC.spd = clamp(o.spd ?? 1, SP_MIN, SP_MAX);
 		SC.variable = o.variable !== 0;
 		SC.highlightEnabled = o.highlight !== 0;
+		const rawCtxLines = Number.parseInt(String(o.focusContextLines ?? ''), 10);
+		SC.focusContextLines = Number.isFinite(rawCtxLines) ? clamp(rawCtxLines, FOCUS_CONTEXT_LINES_MIN, FOCUS_CONTEXT_LINES_MAX) : FOCUS_CONTEXT_LINES;
 		return markerRestored;
 	} catch (e) {
 		return false;
@@ -422,6 +432,9 @@ function buildVarCurve() {
 		if (centerY < SC.sx - 14 || centerY > SC.ex + 14) continue;
 		entries.push({
 			y: centerY,
+			topY: r.top + window.scrollY,
+			bottomY: r.bottom + window.scrollY,
+			el: el,
 			lz: lyricLenFromEl(el),
 			h: 0, // unused
 		});
@@ -442,7 +455,7 @@ function buildVarCurve() {
 		acc += (segWeights[i] / sum) * SC.ms;
 		cumMs.push(acc);
 	}
-	return { cumMs, ytab };
+	return { cumMs, ytab, entries };
 }
 
 function interpVar(curve, elapsedMs0) {
@@ -527,10 +540,9 @@ function stopEndCountdownDisplay() {
 	}
 }
 
-function startEndCountdownDisplay(remainingMs, speedFactor) {
+function startEndCountdownDisplay(remainingMs) {
 	stopEndCountdownDisplay();
 	const remainStart = Math.max(0, Number(remainingMs) || 0);
-	const sp = clamp(Number(speedFactor) || 1, SP_MIN, SP_MAX);
 	if (!SC.remainEl) return;
 	if (remainStart <= 0) {
 		SC.remainEl.textContent = fmtDur(0);
@@ -540,7 +552,7 @@ function startEndCountdownDisplay(remainingMs, speedFactor) {
 	SC.remainEl.textContent = fmtDur(remainStart);
 	SC.endCountdownTimerId = setInterval(() => {
 		const elapsedMs = Math.max(0, performance.now() - startedAt);
-		const remainNow = Math.max(0, remainStart - elapsedMs * sp);
+		const remainNow = Math.max(0, remainStart - elapsedMs);
 		if (SC.remainEl) SC.remainEl.textContent = fmtDur(remainNow);
 		if (remainNow <= 0) {
 			stopEndCountdownDisplay();
@@ -551,12 +563,13 @@ function startEndCountdownDisplay(remainingMs, speedFactor) {
 function stopPlay(msg, options) {
 	const reachedEnd = options?.reachedEnd === true;
 	const remainingMs = Math.max(0, SC.ms - SC.elapsed);
-	const speedFactorAtStop = clamp(SC.spd || 1, SP_MIN, SP_MAX);
 	stopEndCountdownDisplay();
 	if (SC.frame) {
 		cancelAnimationFrame(SC.frame);
 		SC.frame = null;
 	}
+	if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
+	stopOverlayReleaseTimer();
 	SC.playing = false;
 	SC.elapsed = 0;
 	SC.tPrev = 0;
@@ -569,10 +582,17 @@ function stopPlay(msg, options) {
 	SC.rewindPending = reachedEnd;
 	if (reachedEnd) {
 		setFocusOverlayActive(true);
-		startOverlayEndAnimation(remainingMs);
-		startEndCountdownDisplay(remainingMs, speedFactorAtStop);
+		if (SC.variable && SC.varCurve) {
+			if (remainingMs <= 1) {
+				scheduleOverlayReleaseAfterEnd();
+			} else {
+				startEndCountdownDisplay(remainingMs);
+			}
+		} else {
+			startOverlayEndAnimation(remainingMs);
+			startEndCountdownDisplay(remainingMs);
+		}
 	} else {
-		if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
 		SC.overlayScreenY = null;
 		setFocusOverlayActive(false);
 	}
@@ -614,25 +634,29 @@ function frame(nowMs) {
 	if (nowMs < (SC.userScrollOverrideUntilMs || 0)) {
 		const scrollDelta = window.scrollY - SC.overlayPrevScrollY;
 		SC.overlayPrevScrollY = window.scrollY;
-		if (SC.overlayPhase === 'start-to-center') {
-			SC.overlayScreenY = (SC.overlayScreenY || window.innerHeight / 2) + 1.2 * scrollDelta;
-			if (SC.overlayScreenY >= window.innerHeight / 2) {
-				SC.overlayScreenY = window.innerHeight / 2;
-				SC.overlayPhase = 'center';
-			}
+		if (SC.variable && SC.varCurve) {
+			updateVariableScrollFocusOverlay();
 		} else {
-			SC.overlayScreenY = window.innerHeight / 2;
+			if (SC.overlayPhase === 'start-to-center') {
+				SC.overlayScreenY = (SC.overlayScreenY || window.innerHeight / 2) + 1.2 * scrollDelta;
+				if (SC.overlayScreenY >= window.innerHeight / 2) {
+					SC.overlayScreenY = window.innerHeight / 2;
+					SC.overlayPhase = 'center';
+				}
+			} else {
+				SC.overlayScreenY = window.innerHeight / 2;
+			}
+			applyOverlayTop();
 		}
 		SC.virtualScrollY = window.scrollY;
-		applyOverlayTop();
 		updatePlayingStatusText();
 		if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 		SC.frame = requestAnimationFrame(frame);
 		return;
 	}
 
-	// エンドマーカーが見えたら、カウントダウンより優先して停止（フレーム先頭チェック）
-	if (visibleEndEnough()) {
+	// エンドマーカーが見えたら、カウントダウンより優先して停止（フレーム先頭チェック・等速モードのみ）
+	if (!SC.variable && visibleEndEnough()) {
 		stopPlay('エンドまで到達しました。クリックで先頭へ戻ります。', { reachedEnd: true });
 		return;
 	}
@@ -642,7 +666,6 @@ function frame(nowMs) {
 
 	if (SC.elapsed >= SC.ms) {
 		stopPlay(SC.statusEl ? '終了しました。クリックで先頭へ戻ります。' : null, { reachedEnd: true });
-		scrollToProg(1, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
 		return;
 	}
 
@@ -659,7 +682,11 @@ function frame(nowMs) {
 		} else {
 			// まだ初期表示範囲内 → スクロールなし
 			SC.overlayPrevScrollY = window.scrollY;
-			applyOverlayTop();
+			if (SC.varCurve) {
+				updateVariableScrollFocusOverlay();
+			} else {
+				applyOverlayTop();
+			}
 			updatePlayingStatusText();
 			if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 			SC.frame = requestAnimationFrame(frame);
@@ -670,24 +697,31 @@ function frame(nowMs) {
 
 	if (!SC.hasScrollStarted) SC.hasScrollStarted = true;
 	const u = SC.elapsed / SC.ms;
-	scrollToProg(u, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
-	if (SC.overlayPhase === 'start-to-center') {
-		const scrollDelta = window.scrollY - SC.overlayPrevScrollY;
-		SC.overlayScreenY = (SC.overlayScreenY || window.innerHeight / 2) + 1.2 * scrollDelta;
-		if (SC.overlayScreenY >= window.innerHeight / 2) {
-			SC.overlayScreenY = window.innerHeight / 2;
-			SC.overlayPhase = 'center';
-		}
-	} else {
-		SC.overlayScreenY = window.innerHeight / 2;
+	// 可変モードでエンドマーカーが可視になったらスクロールを凍結し、ハイライトのみ継続する
+	if (!(SC.variable && visibleEndEnough())) {
+		scrollToProg(u, SC.variable ? VARIABLE_FOCUS_RATIO_FINAL : FOCUS_RATIO);
 	}
-	SC.overlayPrevScrollY = window.scrollY;
-	applyOverlayTop();
+	if (SC.variable && SC.varCurve) {
+		updateVariableScrollFocusOverlay();
+	} else {
+		if (SC.overlayPhase === 'start-to-center') {
+			const scrollDelta = window.scrollY - SC.overlayPrevScrollY;
+			SC.overlayScreenY = (SC.overlayScreenY || window.innerHeight / 2) + 1.2 * scrollDelta;
+			if (SC.overlayScreenY >= window.innerHeight / 2) {
+				SC.overlayScreenY = window.innerHeight / 2;
+				SC.overlayPhase = 'center';
+			}
+		} else {
+			SC.overlayScreenY = window.innerHeight / 2;
+		}
+		SC.overlayPrevScrollY = window.scrollY;
+		applyOverlayTop();
+	}
 	updatePlayingStatusText();
 	if (SC.remainEl) SC.remainEl.textContent = fmtDur(Math.max(0, SC.ms - SC.elapsed));
 
-	// スクロール後の再チェック（スクロールで新たに見えた場合）
-	if (visibleEndEnough()) {
+	// スクロール後の再チェック（スクロールで新たに見えた場合・等速モードのみ）
+	if (!SC.variable && visibleEndEnough()) {
 		stopPlay('エンドまで到達しました。クリックで先頭へ戻ります。', { reachedEnd: true });
 		return;
 	}
@@ -881,6 +915,118 @@ function stepOverlayScreenY(targetY, dtMs) {
 	void targetY; void dtMs; // legacy shim - no longer used in frame
 }
 
+function stopOverlayReleaseTimer() {
+	if (SC.overlayReleaseTimerId) {
+		clearTimeout(SC.overlayReleaseTimerId);
+		SC.overlayReleaseTimerId = 0;
+	}
+}
+
+function scheduleOverlayReleaseAfterEnd() {
+	stopOverlayReleaseTimer();
+	SC.overlayReleaseTimerId = setTimeout(() => {
+		SC.overlayReleaseTimerId = 0;
+		if (!SC.playing && SC.rewindPending) {
+			SC.overlayScreenY = null;
+			setFocusOverlayActive(false);
+		}
+	}, OVERLAY_RELEASE_DELAY_MS);
+}
+
+function getLineFloatFromElapsedMs(elapsedMs) {
+	const curve = SC.varCurve;
+	if (!curve) return 0;
+	const cum = curve.cumMs;
+	const cap = cum[cum.length - 1] || SC.ms;
+	const e = clamp(elapsedMs, 0, cap);
+	let k = 0;
+	while (k + 1 < cum.length && e >= cum[k + 1] - 1e-9) k++;
+	const t0 = cum[k];
+	const t1 = cum[k + 1] || cum[k];
+	const ratio = Math.abs(t1 - t0) < 1e-9 ? 0 : clamp((e - t0) / (t1 - t0), 0, 1);
+	return k + ratio;
+}
+
+function interpolateEntryBoundaryY(entries, indexFloat, key) {
+	if (!Array.isArray(entries) || !entries.length) return 0;
+	const maxIndex = entries.length - 1;
+	const safeIndex = clamp(Number(indexFloat) || 0, 0, maxIndex);
+	const lowerIndex = Math.floor(safeIndex);
+	const upperIndex = Math.min(maxIndex, lowerIndex + 1);
+	const ratio = clamp(safeIndex - lowerIndex, 0, 1);
+	const lowerY = Number(entries[lowerIndex]?.[key]) || 0;
+	const upperY = Number(entries[upperIndex]?.[key]) || lowerY;
+	return lowerY + (upperY - lowerY) * ratio;
+}
+
+function getEndMarkerBottomDocY() {
+	if (SC.mEnd instanceof Element) {
+		const rect = SC.mEnd.getBoundingClientRect();
+		return rect.bottom + window.scrollY;
+	}
+	return Number.isFinite(SC.ex) ? SC.ex : 0;
+}
+
+function updateVariableScrollFocusOverlay() {
+	if (!(SC.focusOverlayEl instanceof Element)) return;
+	const curve = SC.varCurve;
+	const entries = Array.isArray(curve?.entries) ? curve.entries : [];
+	if (!entries.length) return;
+
+	const contextLines = clamp(SC.focusContextLines || FOCUS_CONTEXT_LINES, FOCUS_CONTEXT_LINES_MIN, FOCUS_CONTEXT_LINES_MAX);
+	const windowSize = Math.min(entries.length, (contextLines * 2) + 1);
+	const maxTopIndex = Math.max(0, entries.length - windowSize);
+	const currentLineFloat = getLineFloatFromElapsedMs(SC.elapsed);
+	const topLineFloat = clamp(currentLineFloat - contextLines, 0, maxTopIndex);
+	const bottomLineFloat = topLineFloat + Math.max(0, windowSize - 1);
+
+	let overlayTopDocY = interpolateEntryBoundaryY(entries, topLineFloat, 'topY');
+	let overlayBottomDocY = interpolateEntryBoundaryY(entries, bottomLineFloat, 'bottomY');
+
+	const baseMinTopDocY = Number(entries[0]?.topY) || overlayTopDocY;
+	let minTopDocY = baseMinTopDocY;
+
+	if (SC.phase === 'lead-in') {
+		const firstLineEl = entries[0]?.el;
+		if (firstLineEl instanceof Element) {
+			const lineRect = firstLineEl.getBoundingClientRect();
+			let chordTop = lineRect.top;
+			firstLineEl.querySelectorAll('span.chord').forEach((chordEl) => {
+				const chordRect = chordEl.getBoundingClientRect();
+				chordTop = Math.min(chordTop, chordRect.top);
+			});
+			const topCorrectionPx = Math.max(0, Math.round(lineRect.top - chordTop));
+			overlayTopDocY -= topCorrectionPx;
+		}
+		if (SC.mStart instanceof Element) {
+			minTopDocY = SC.mStart.getBoundingClientRect().bottom + window.scrollY;
+		} else if (Number.isFinite(SC.sx)) {
+			minTopDocY = SC.sx;
+		}
+	}
+
+	const maxBottomDocY = Math.max(baseMinTopDocY, getEndMarkerBottomDocY());
+	const desiredHeight = Math.max(1, overlayBottomDocY - overlayTopDocY);
+
+	overlayBottomDocY = clamp(overlayBottomDocY, minTopDocY, maxBottomDocY);
+	overlayTopDocY = clamp(overlayBottomDocY - desiredHeight, minTopDocY, overlayBottomDocY - 1);
+
+	const topScreen = clamp(
+		Math.round(overlayTopDocY - window.scrollY),
+		0,
+		Math.max(0, window.innerHeight - 1)
+	);
+	const height = clamp(
+		Math.round(overlayBottomDocY - overlayTopDocY),
+		1,
+		Math.max(1, window.innerHeight - topScreen)
+	);
+
+	SC.overlayHighlightH = height;
+	SC.focusOverlayEl.style.setProperty('--cw-focus-top', topScreen + 'px');
+	SC.focusOverlayEl.style.setProperty('--cw-focus-h', height + 'px');
+}
+
 function startOverlayEndAnimation(durationMs) {
 	if (SC.overlayEndAnimId) cancelAnimationFrame(SC.overlayEndAnimId);
 	// エンドマーカーの上端・下端スクリーンY（実 DOM 矩形優先）
@@ -914,6 +1060,7 @@ function startOverlayEndAnimation(durationMs) {
 			applyOverlayTop();
 			if (target >= phase2Center) {
 				SC.overlayEndAnimId = null; // phase2到達で停止
+				scheduleOverlayReleaseAfterEnd();
 			} else {
 				SC.overlayEndAnimId = requestAnimationFrame(animStep); // phase1→phase2へ継続
 			}
@@ -941,6 +1088,7 @@ function countLinesInMarkerRange() {
 }
 
 function canUseFocusOverlay() {
+	if (!SC.variable) return false;
 	if (!SC.highlightEnabled) return false;
 	if (vmax() < FOCUS_OVERLAY_MIN_SCROLL_PX) return false;
 	const lineCount = countLinesInMarkerRange();
@@ -1173,6 +1321,7 @@ function startPlay() {
 	}
 	stopEndCountdownDisplay();
 	if (SC.overlayEndAnimId) { cancelAnimationFrame(SC.overlayEndAnimId); SC.overlayEndAnimId = null; }
+	stopOverlayReleaseTimer();
 	SC.overlayPhase = shouldStartFromMarker ? 'start-to-center' : 'center';
 	SC.overlayPrevScrollY = window.scrollY;
 	SC.overlayScreenY = shouldStartFromMarker
@@ -1311,6 +1460,7 @@ function mountUi() {
 		'<div class="cw-toggle-stack">' +
 		'<label class="cw-var-toggle"><input type="checkbox" id="cw-variable" checked /><span>可変スクロール</span></label>' +
 		'<label class="cw-hl-toggle"><input type="checkbox" id="cw-highlight" checked /><span>ハイライト表示</span></label>' +
+		'<label class="cw-ctx-lines-label"><span>前後</span><input type="number" id="cw-ctx-lines" min="2" max="6" step="1" value="4" inputmode="numeric" style="width:3em" /><span>行</span></label>' +
 		'</div>' +
 		'</div>' +
 		'<div class="cw-est-row">推定時間 <span id="cw-est-dur">--:--</span> <span id="cw-src" class="cw-src"></span> <span id="cw-query-pair" class="cw-query-pair">:</span></div>' +
@@ -1523,6 +1673,13 @@ function mountUi() {
 
 	const varCb = root.querySelector('#cw-variable');
 	varCb.checked = SC.variable;
+
+	function syncHighlightControlsDisabled() {
+		const isVar = SC.variable;
+		highlightCb.disabled = !isVar;
+		if (ctxLinesInput) ctxLinesInput.disabled = !isVar;
+	}
+
 	varCb.addEventListener('change', () => {
 		SC.variable = varCb.checked;
 		if (SC.playing) {
@@ -1530,6 +1687,7 @@ function mountUi() {
 		}
 		refreshVarCurve();
 		saveState();
+		syncHighlightControlsDisabled();
 		setStatus(SC.variable ? '可変スクロール ON' : '等速モード', 'info');
 	});
 
@@ -1542,6 +1700,22 @@ function mountUi() {
 		setFocusOverlayActive(SC.playing && SC.phase !== 'lead-in');
 		setStatus(SC.highlightEnabled ? 'ハイライト表示 ON' : 'ハイライト表示 OFF', 'info');
 	});
+
+	const ctxLinesInput = root.querySelector('#cw-ctx-lines');
+	if (ctxLinesInput) {
+		ctxLinesInput.value = String(SC.focusContextLines || FOCUS_CONTEXT_LINES);
+		ctxLinesInput.addEventListener('change', () => {
+			const val = Number.parseInt(ctxLinesInput.value, 10);
+			SC.focusContextLines = clamp(Number.isFinite(val) ? val : FOCUS_CONTEXT_LINES, FOCUS_CONTEXT_LINES_MIN, FOCUS_CONTEXT_LINES_MAX);
+			ctxLinesInput.value = String(SC.focusContextLines);
+			saveState();
+			if (SC.playing && SC.variable && SC.varCurve) {
+				updateVariableScrollFocusOverlay();
+			}
+		});
+	}
+
+	syncHighlightControlsDisabled();
 
 	window.addEventListener('scroll', () => {
 		if (!SC.extensionEnabled) return;
