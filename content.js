@@ -25,6 +25,12 @@ const FOCUS_CONTEXT_LINES = 4;
 const FOCUS_CONTEXT_LINES_MIN = 2;
 const FOCUS_CONTEXT_LINES_MAX = 6;
 const OVERLAY_RELEASE_DELAY_MS = 2000;
+const METRO_BPM_MIN = 30;
+const METRO_BPM_MAX = 300;
+const METRO_BEATS_MIN = 2;
+const METRO_BEATS_MAX = 6;
+const METRO_ACCENT_RATIO = 0.24;
+const STORAGE_METRO_BEATS_KEY = `${STORAGE_NS}:metro_beats`;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
 }
@@ -235,6 +241,21 @@ const SC = /** @type {Record<string, any>} */ ({
 	extensionEnabled: true,
 });
 
+const metroState = {
+	enabled: false,
+	running: false,
+	userStopped: false,
+	bpm: null,
+	beats: 4,
+	rafId: 0,
+	startTs: 0,
+	lastBeat: -1,
+	rowEl: null,
+	beatsEl: null,
+	dotsEl: null,
+	toggleEl: null,
+};
+
 function loadUiVisibleState() {
 	try {
 		return localStorage.getItem(STORAGE_UI_VISIBLE_KEY) === '1';
@@ -249,6 +270,215 @@ function saveUiVisibleState(visible) {
 		localStorage.setItem(STORAGE_UI_VISIBLE_KEY, visible ? '1' : '0');
 	} catch (e) {
 		void e;
+	}
+}
+
+function metroStorageKeyPage() {
+	return `${STORAGE_METRO_BEATS_KEY}:${window.location.pathname}`;
+}
+
+function clampMetroBeats(value) {
+	const n = Number.parseInt(String(value ?? ''), 10);
+	if (!Number.isFinite(n)) return 4;
+	return clamp(n, METRO_BEATS_MIN, METRO_BEATS_MAX);
+}
+
+function parseBpmFromText(text) {
+	if (!text) return null;
+	const m = /(?:^|[^\d])BPM\s*=\s*(\d{1,3})(?=$|[^\d])/i.exec(String(text));
+	if (!m) return null;
+	const bpm = Number.parseInt(m[1], 10);
+	if (!Number.isFinite(bpm)) return null;
+	if (bpm < METRO_BPM_MIN || bpm > METRO_BPM_MAX) return null;
+	return bpm;
+}
+
+function collectBpmCandidatesFromChordComments() {
+	const sh = getSheetEl();
+	if (!(sh instanceof Element)) return [];
+	const out = [];
+	const nodes = sh.querySelectorAll('p.comment, .comment');
+	nodes.forEach((el) => {
+		if (!(el instanceof Element)) return;
+		const text = normalizeMetaText(el.textContent || el.innerText || '');
+		const bpm = parseBpmFromText(text);
+		if (!bpm) return;
+		const rect = el.getBoundingClientRect();
+		out.push({
+			bpm,
+			docY: (rect.top + window.scrollY + rect.bottom + window.scrollY) / 2,
+		});
+	});
+	return out;
+}
+
+function resolveBpmForCurrentStartMarker() {
+	const candidates = collectBpmCandidatesFromChordComments();
+	if (!candidates.length) return null;
+	let nearest = candidates[0];
+	let best = Math.abs((candidates[0].docY || 0) - SC.sx);
+	for (const c of candidates.slice(1)) {
+		const dist = Math.abs((c.docY || 0) - SC.sx);
+		if (dist < best) {
+			best = dist;
+			nearest = c;
+		}
+	}
+	return nearest?.bpm ?? null;
+}
+
+function buildMetroDots(count) {
+	if (!(metroState.dotsEl instanceof Element)) return;
+	const beats = clampMetroBeats(count);
+	metroState.dotsEl.innerHTML = '';
+	for (let i = 0; i < beats; i += 1) {
+		const dot = document.createElement('span');
+		dot.className = 'cw-metro-dot';
+		dot.dataset.beat = String(i + 1);
+		metroState.dotsEl.appendChild(dot);
+	}
+}
+
+function setMetroToggleLabel() {
+	if (!(metroState.toggleEl instanceof HTMLButtonElement)) return;
+	metroState.toggleEl.textContent = metroState.running ? '停止' : '再開';
+}
+
+function setMetroUiEnabled(enabled) {
+	metroState.enabled = enabled === true;
+	if (metroState.rowEl) {
+		metroState.rowEl.classList.toggle('is-disabled', !metroState.enabled);
+	}
+	if (metroState.beatsEl) {
+		metroState.beatsEl.disabled = !metroState.enabled;
+	}
+	if (metroState.toggleEl) {
+		metroState.toggleEl.disabled = !metroState.enabled;
+	}
+}
+
+function resetMetroVisuals() {
+	if (!(metroState.rowEl instanceof Element)) return;
+	metroState.rowEl.classList.remove('is-accent');
+	if (!(metroState.dotsEl instanceof Element)) return;
+	metroState.dotsEl.querySelectorAll('.cw-metro-dot').forEach((el, idx) => {
+		el.classList.toggle('is-active', idx === 0 && metroState.enabled);
+		el.classList.remove('is-accent');
+	});
+}
+
+function saveMetroBeatsPreference() {
+	try {
+		localStorage.setItem(metroStorageKeyPage(), String(clampMetroBeats(metroState.beats)));
+	} catch (e) {
+		void e;
+	}
+}
+
+function restoreMetroBeatsPreference() {
+	try {
+		const raw = localStorage.getItem(metroStorageKeyPage());
+		metroState.beats = clampMetroBeats(raw || metroState.beats);
+	} catch (e) {
+		metroState.beats = clampMetroBeats(metroState.beats);
+	}
+}
+
+function stopVisualMetronome(options) {
+	const userInitiated = options?.userInitiated === true;
+	if (metroState.rafId) {
+		cancelAnimationFrame(metroState.rafId);
+		metroState.rafId = 0;
+	}
+	metroState.running = false;
+	metroState.startTs = 0;
+	metroState.lastBeat = -1;
+	if (userInitiated) {
+		metroState.userStopped = true;
+	}
+	setMetroToggleLabel();
+	resetMetroVisuals();
+}
+
+function updateMetroFrame(ts) {
+	if (!metroState.running || !metroState.enabled || !metroState.bpm) return;
+	if (!metroState.startTs) {
+		metroState.startTs = ts;
+	}
+	const beatMs = 60000 / metroState.bpm;
+	const elapsed = Math.max(0, ts - metroState.startTs);
+	const beatIndex = Math.floor(elapsed / beatMs);
+	const beatInMeasure = beatIndex % metroState.beats;
+	const beatProgress = (elapsed % beatMs) / beatMs;
+	const isAccent = beatInMeasure === 0 && beatProgress < METRO_ACCENT_RATIO;
+	if (metroState.lastBeat !== beatInMeasure && metroState.dotsEl) {
+		metroState.dotsEl.querySelectorAll('.cw-metro-dot').forEach((el, idx) => {
+			const active = idx === beatInMeasure;
+			el.classList.toggle('is-active', active);
+			el.classList.toggle('is-accent', active && beatInMeasure === 0);
+		});
+		metroState.lastBeat = beatInMeasure;
+	}
+	if (metroState.rowEl) {
+		metroState.rowEl.classList.toggle('is-accent', isAccent);
+	}
+	metroState.rafId = requestAnimationFrame(updateMetroFrame);
+}
+
+function startVisualMetronomeFromFirstBeat() {
+	if (!metroState.enabled || !metroState.bpm) return;
+	if (metroState.rafId) {
+		cancelAnimationFrame(metroState.rafId);
+		metroState.rafId = 0;
+	}
+	metroState.running = true;
+	metroState.userStopped = false;
+	metroState.startTs = 0;
+	metroState.lastBeat = -1;
+	setMetroToggleLabel();
+	resetMetroVisuals();
+	metroState.rafId = requestAnimationFrame(updateMetroFrame);
+}
+
+function toggleVisualMetronome() {
+	if (!metroState.enabled) return;
+	if (metroState.running) {
+		stopVisualMetronome({ userInitiated: true });
+		return;
+	}
+	startVisualMetronomeFromFirstBeat();
+}
+
+function syncVisualMetronomeBpmFromStartMarker() {
+	const bpm = resolveBpmForCurrentStartMarker();
+	const wasRunning = metroState.running;
+	metroState.bpm = bpm;
+	if (!bpm) {
+		setMetroUiEnabled(false);
+		stopVisualMetronome({ userInitiated: false });
+		return;
+	}
+	setMetroUiEnabled(true);
+	if (wasRunning) {
+		startVisualMetronomeFromFirstBeat();
+	}
+}
+
+function restartVisualMetronomeFromFirstBeatIfRunning() {
+	if (!metroState.running || !metroState.enabled) return;
+	startVisualMetronomeFromFirstBeat();
+}
+
+function setupVisualMetronomeForSong() {
+	restoreMetroBeatsPreference();
+	if (metroState.beatsEl) {
+		metroState.beatsEl.value = String(metroState.beats);
+	}
+	buildMetroDots(metroState.beats);
+	metroState.userStopped = false;
+	syncVisualMetronomeBpmFromStartMarker();
+	if (metroState.enabled) {
+		startVisualMetronomeFromFirstBeat();
 	}
 }
 
@@ -755,6 +985,9 @@ function setMarkerXY(which, docY, persist) {
 	refreshVarCurve();
 	placeMarkers();
 	setFocusOverlayActive(SC.playing);
+	if (which === 's') {
+		syncVisualMetronomeBpmFromStartMarker();
+	}
 	if (persist) {
 		saveState();
 		setStatus('マーカーを保存しました', 'success');
@@ -1235,6 +1468,7 @@ function resetMarkersUi() {
 	refreshVarCurve();
 	placeMarkers();
 	setFocusOverlayActive(SC.playing);
+	syncVisualMetronomeBpmFromStartMarker();
 	saveState();
 	setStatus('マーカーを既定位置へ', 'info');
 }
@@ -1305,6 +1539,7 @@ function startPlay() {
 	updateFocusOverlayGeometry();
 	setFocusOverlayActive(true);
 	updatePlayingStatusText();
+	restartVisualMetronomeFromFirstBeatIfRunning();
 	SC.frame = requestAnimationFrame(frame);
 	saveState();
 }
@@ -1404,6 +1639,20 @@ function mountUi() {
 		'<div class="cw-autoscroll-head-main">' +
 		'<div class="cw-autoscroll-title">Song Controls</div>' +
 		'<div id="cw-status" class="cw-autoscroll-status" data-tone="info">停止中</div>' +
+		'<div id="cw-metro-row" class="cw-metro-row is-disabled" aria-label="Visual metronome">' +
+		'<label for="cw-metro-beats" class="cw-metro-beats-wrap">' +
+		'<span class="cw-metro-label">拍子</span>' +
+		'<select id="cw-metro-beats" class="cw-metro-beats-select" disabled>' +
+		'<option value="2">2</option>' +
+		'<option value="3">3</option>' +
+		'<option value="4" selected>4</option>' +
+		'<option value="5">5</option>' +
+		'<option value="6">6</option>' +
+		'</select>' +
+		'</label>' +
+		'<div id="cw-metro-dots" class="cw-metro-dots" aria-hidden="true"></div>' +
+		'<button id="cw-metro-toggle" type="button" class="cw-metro-toggle" disabled>停止</button>' +
+		'</div>' +
 		'</div>' +
 		'<button type="button" id="cw-collapse" class="cw-collapse-btn" aria-expanded="true">≫</button>' +
 		'</div>' +
@@ -1466,7 +1715,32 @@ function mountUi() {
 	SC.queryPairEl = root.querySelector('#cw-query-pair');
 	SC.debugUrlEl = root.querySelector('#cw-debug-url');
 	SC.uiRoot = root;
+	metroState.rowEl = root.querySelector('#cw-metro-row');
+	metroState.beatsEl = root.querySelector('#cw-metro-beats');
+	metroState.dotsEl = root.querySelector('#cw-metro-dots');
+	metroState.toggleEl = root.querySelector('#cw-metro-toggle');
 	updateQueryPairDisplay();
+	buildMetroDots(metroState.beats);
+	setMetroToggleLabel();
+	resetMetroVisuals();
+
+	metroState.beatsEl?.addEventListener('change', (ev) => {
+		const next = clampMetroBeats(ev.currentTarget?.value);
+		metroState.beats = next;
+		if (metroState.beatsEl) {
+			metroState.beatsEl.value = String(next);
+		}
+		saveMetroBeatsPreference();
+		buildMetroDots(next);
+		if (metroState.running) {
+			startVisualMetronomeFromFirstBeat();
+		} else {
+			resetMetroVisuals();
+		}
+	});
+	metroState.toggleEl?.addEventListener('click', () => {
+		toggleVisualMetronome();
+	});
 
 	const UI_RIGHT_MARGIN_PX = 22;
 	const headEl = root.querySelector('.cw-autoscroll-head');
@@ -1740,6 +2014,7 @@ function bootstrapMarkersAndUi() {
 	refreshVarCurve();
 	placeMarkers();
 	setStatus('停止中 · ' + fmtDur(SC.ms), 'info');
+	setupVisualMetronomeForSong();
 	setUiVisibility(loadUiVisibleState());
 
 	chrome.runtime.sendMessage({ type: 'getOptions' }, (resp) => {
