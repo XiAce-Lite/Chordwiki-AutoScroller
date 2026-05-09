@@ -285,9 +285,22 @@ function clampMetroBeats(value) {
 
 function parseBpmFromText(text) {
 	if (!text) return null;
-	const m = /(?:^|[^\d])BPM\s*=\s*(\d{1,3})(?=$|[^\d])/i.exec(String(text));
-	if (!m) return null;
-	const bpm = Number.parseInt(m[1], 10);
+	const s = String(text);
+	const rangeRe =
+		/(?:^|[^\d])BPM\s*[=≒≈＝]\s*(\d{1,3})\s*[～〜~\-\u2013\u2014\u2212]\s*(\d{1,3})(?=$|[^\d])/i;
+	const rm = rangeRe.exec(s);
+	if (rm) {
+		const a = Number.parseInt(rm[1], 10);
+		const b = Number.parseInt(rm[2], 10);
+		if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+		if (a < METRO_BPM_MIN || a > METRO_BPM_MAX || b < METRO_BPM_MIN || b > METRO_BPM_MAX) {
+			return null;
+		}
+		return clamp(Math.round((a + b) / 2), METRO_BPM_MIN, METRO_BPM_MAX);
+	}
+	const sm = /(?:^|[^\d])BPM\s*[=≒≈＝]\s*(\d{1,3})(?=$|[^\d])/i.exec(s);
+	if (!sm) return null;
+	const bpm = Number.parseInt(sm[1], 10);
 	if (!Number.isFinite(bpm)) return null;
 	if (bpm < METRO_BPM_MIN || bpm > METRO_BPM_MAX) return null;
 	return bpm;
