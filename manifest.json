@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Chordwiki-AutoScroller",
+  "version": "1.0.7",
+  "description": "Auto-scrolling, duration lookup, and utility features for chord and lyrics pages.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    },
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://ja.chordwiki.org/*",
+    "https://musicbrainz.org/*",
+    "https://itunes.apple.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://ja.chordwiki.org/wiki/*",
+        "https://ja.chordwiki.org/wiki.cgi?c=view&*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ]
+    }
+  ]
+}
