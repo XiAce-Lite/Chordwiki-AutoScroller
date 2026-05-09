@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chordwiki-AutoScroller",
-  "version": "1.0.7",
+  "version": "1.0.9",
   "description": "Auto-scrolling, duration lookup, and utility features for chord and lyrics pages.",
   "icons": {
     "16": "icons/icon16.png",

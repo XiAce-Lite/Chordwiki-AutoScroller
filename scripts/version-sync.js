@@ -5,6 +5,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const MANIFEST_PATH = path.join(ROOT, 'manifest.json');
+const MANIFEST_EXAMPLE_PATH = path.join(ROOT, 'manifest.example.json');
 const BACKGROUND_PATH = path.join(ROOT, 'background.js');
 
 const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
@@ -84,6 +85,15 @@ function writeBackgroundVersion(version) {
 	fs.writeFileSync(BACKGROUND_PATH, next, 'utf8');
 }
 
+/** manifest.json（ローカル）から `key` を除いた複製を manifest.example.json に書く（コミット用）。 */
+function writeManifestExampleFromManifest() {
+	const { json } = readManifest();
+	const out = { ...json };
+	delete out.key;
+	fs.writeFileSync(MANIFEST_EXAMPLE_PATH, `${JSON.stringify(out, null, 2)}\n`, 'utf8');
+	console.log(`Wrote ${path.relative(ROOT, MANIFEST_EXAMPLE_PATH)} (key omitted)`);
+}
+
 function checkSync() {
 	const { json } = readManifest();
 	const manifestVersion = json.version;
@@ -112,6 +122,7 @@ function bumpAndSync() {
 	const next = bumpVersion(current);
 	writeManifestVersion(next);
 	writeBackgroundVersion(next);
+	writeManifestExampleFromManifest();
 	console.log(`Bumped version: ${current} -> ${next}`);
 }
 
@@ -129,7 +140,11 @@ function main() {
 		bumpAndSync();
 		return;
 	}
-	throw new Error('usage: node scripts/version-sync.js [check|sync|bump]');
+	if (mode === 'write-example') {
+		writeManifestExampleFromManifest();
+		return;
+	}
+	throw new Error('usage: node scripts/version-sync.js [check|sync|bump|write-example]');
 }
 
 main();

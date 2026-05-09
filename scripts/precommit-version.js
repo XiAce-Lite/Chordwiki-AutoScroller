@@ -59,7 +59,7 @@ function main() {
 	execSync('node scripts/version-sync.js bump', { stdio: 'inherit' });
 	const version = getManifestVersion();
 	syncPopupVersion(version);
-	execSync('git add manifest.json background.js popup.html', { stdio: 'inherit' });
+	execSync('git add manifest.example.json background.js popup.html', { stdio: 'inherit' });
 	execSync('node scripts/version-sync.js check', { stdio: 'inherit' });
 }
 
