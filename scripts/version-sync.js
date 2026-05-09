@@ -62,11 +62,22 @@ function writeManifestVersion(version) {
 	fs.writeFileSync(MANIFEST_PATH, `${JSON.stringify(json, null, 2)}\n`, 'utf8');
 }
 
-/** manifest.json（ローカル）から `key` を除いた複製を manifest.example.json に書く（コミット用）。 */
+/** manifest のトップレベルで名前が `key` とみなせるプロパティを除く（公開鍵など）。 */
+function stripManifestKeyField(obj) {
+	const out = JSON.parse(JSON.stringify(obj));
+	for (const prop of Object.keys(out)) {
+		const canon = String(prop).normalize('NFKC').toLowerCase();
+		if (canon === 'key') {
+			delete out[prop];
+		}
+	}
+	return out;
+}
+
+/** manifest.json（ローカル）から key を除いた複製を manifest.example.json に書く（コミット用）。 */
 function writeManifestExampleFromManifest() {
 	const { json } = readManifest();
-	const out = { ...json };
-	delete out.key;
+	const out = stripManifestKeyField(json);
 	fs.writeFileSync(MANIFEST_EXAMPLE_PATH, `${JSON.stringify(out, null, 2)}\n`, 'utf8');
 	console.log(`Wrote ${path.relative(ROOT, MANIFEST_EXAMPLE_PATH)} (key omitted)`);
 }
