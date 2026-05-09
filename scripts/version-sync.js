@@ -6,10 +6,8 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const MANIFEST_PATH = path.join(ROOT, 'manifest.json');
 const MANIFEST_EXAMPLE_PATH = path.join(ROOT, 'manifest.example.json');
-const BACKGROUND_PATH = path.join(ROOT, 'background.js');
 
 const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
-const UA_VERSION_RE = /(Chordwiki-AutoScroller\/)(\d+\.\d+\.\d+)(\s*\(https:\/\/github\.com\/\))/;
 const MAX_PART = 99;
 
 function readManifest() {
@@ -64,27 +62,6 @@ function writeManifestVersion(version) {
 	fs.writeFileSync(MANIFEST_PATH, `${JSON.stringify(json, null, 2)}\n`, 'utf8');
 }
 
-function readBackground() {
-	return fs.readFileSync(BACKGROUND_PATH, 'utf8');
-}
-
-function getBackgroundVersion(source) {
-	const m = UA_VERSION_RE.exec(source);
-	if (!m) {
-		throw new Error('background.js の User-Agent バージョンを検出できません');
-	}
-	return m[2];
-}
-
-function writeBackgroundVersion(version) {
-	const src = readBackground();
-	if (!UA_VERSION_RE.test(src)) {
-		throw new Error('background.js の User-Agent バージョン置換に失敗しました');
-	}
-	const next = src.replace(UA_VERSION_RE, `$1${version}$3`);
-	fs.writeFileSync(BACKGROUND_PATH, next, 'utf8');
-}
-
 /** manifest.json（ローカル）から `key` を除いた複製を manifest.example.json に書く（コミット用）。 */
 function writeManifestExampleFromManifest() {
 	const { json } = readManifest();
@@ -98,22 +75,7 @@ function checkSync() {
 	const { json } = readManifest();
 	const manifestVersion = json.version;
 	parseVersion(manifestVersion);
-	const backgroundVersion = getBackgroundVersion(readBackground());
-	parseVersion(backgroundVersion);
-	if (manifestVersion !== backgroundVersion) {
-		throw new Error(
-			`version 不一致: manifest=${manifestVersion}, background(User-Agent)=${backgroundVersion}`
-		);
-	}
-	console.log(`OK: version synchronized (${manifestVersion})`);
-}
-
-function syncToManifest() {
-	const { json } = readManifest();
-	const manifestVersion = json.version;
-	parseVersion(manifestVersion);
-	writeBackgroundVersion(manifestVersion);
-	console.log(`Synced User-Agent version to ${manifestVersion}`);
+	console.log(`OK: manifest version (${manifestVersion})`);
 }
 
 function bumpAndSync() {
@@ -121,7 +83,6 @@ function bumpAndSync() {
 	const current = json.version;
 	const next = bumpVersion(current);
 	writeManifestVersion(next);
-	writeBackgroundVersion(next);
 	writeManifestExampleFromManifest();
 	console.log(`Bumped version: ${current} -> ${next}`);
 }
@@ -132,10 +93,6 @@ function main() {
 		checkSync();
 		return;
 	}
-	if (mode === 'sync') {
-		syncToManifest();
-		return;
-	}
 	if (mode === 'bump') {
 		bumpAndSync();
 		return;
@@ -144,7 +101,7 @@ function main() {
 		writeManifestExampleFromManifest();
 		return;
 	}
-	throw new Error('usage: node scripts/version-sync.js [check|sync|bump|write-example]');
+	throw new Error('usage: node scripts/version-sync.js [check|bump|write-example]');
 }
 
 main();

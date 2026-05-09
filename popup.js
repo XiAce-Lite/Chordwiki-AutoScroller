@@ -23,6 +23,16 @@ function refreshToggleState(btn) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+	const verEl = document.getElementById('cw-popup-version');
+	if (verEl) {
+		try {
+			const v = chrome.runtime.getManifest()?.version ?? '';
+			verEl.textContent = v ? `AutoScroller v${v}` : 'AutoScroller';
+		} catch (_e) {
+			verEl.textContent = 'AutoScroller';
+		}
+	}
+
 	const btn = document.getElementById('toggle');
 	if (!(btn instanceof HTMLButtonElement)) return;
 

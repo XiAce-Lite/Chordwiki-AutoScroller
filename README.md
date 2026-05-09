@@ -31,6 +31,8 @@ node scripts/sync-manifest-example.js
 
 その後、`manifest.example.json` をコミットしてください。バージョン自動 bump の pre-commit でも同様に `manifest.example.json` が更新されます。
 
+バージョン番号の**唯一のソースは `manifest.json` の `version`**です。ポップアップ表示と MusicBrainz 向け User-Agent は実行時に `chrome.runtime.getManifest().version` を参照するため、`background.js` / `popup.html` に固定で書いておく必要はありません。
+
 ## 使い方
 
 1. Chrome拡張としてインストール

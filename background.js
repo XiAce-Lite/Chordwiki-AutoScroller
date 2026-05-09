@@ -14,9 +14,10 @@ const DEFAULT_OPTIONS = {
 
 const DEFAULT_DURATION_MS = 240_000;
 
-/** MusicBrainz requires a descriptive User-Agent. */
-const MUSICBRAINZ_USER_AGENT =
-	'Chordwiki-AutoScroller/1.0.9 (https://github.com/)';
+/** MusicBrainz requires a descriptive User-Agent（version は manifest と同期）。 */
+function getMusicBrainzUserAgent() {
+	return `Chordwiki-AutoScroller/${chrome.runtime.getManifest().version} (https://github.com/)`;
+}
 
 // -----------------------------------------------------------------------------
 // Options
@@ -142,7 +143,7 @@ async function fetchDurationFromMusicBrainz(title, artist, reportDebugUrl) {
 		const resp = await fetch(url, {
 			headers: {
 				Accept: 'application/json',
-				'User-Agent': MUSICBRAINZ_USER_AGENT,
+				'User-Agent': getMusicBrainzUserAgent(),
 			},
 		});
 		if (!resp.ok) {
