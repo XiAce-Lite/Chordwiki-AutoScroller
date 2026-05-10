@@ -31,6 +31,18 @@ const METRO_BEATS_MIN = 2;
 const METRO_BEATS_MAX = 6;
 const METRO_ACCENT_RATIO = 0.24;
 const STORAGE_METRO_BEATS_KEY = `${STORAGE_NS}:metro_beats`;
+
+/** chordwiki-personal song-core.js と同等の可変スクロールウェイト（A 仕様） */
+const AUTO_SCROLL_WEIGHT_FLOOR = 0.22;
+const AUTO_SCROLL_WEIGHT_LYRIC_RATIO = 0.55;
+const AUTO_SCROLL_WEIGHT_CHORD_RATIO = 0.25;
+const AUTO_SCROLL_WEIGHT_VISUAL_RATIO = 0.15;
+const AUTO_SCROLL_WEIGHT_BAR_HINT_RATIO = 0.05;
+const AUTO_SCROLL_PERFORMANCE_LINE_LYRIC_MAX = 2;
+const AUTO_SCROLL_PERFORMANCE_LINE_CHORD_MIN = 4;
+const AUTO_SCROLL_PERFORMANCE_LINE_MIN_WEIGHT = 0.45;
+const AUTO_SCROLL_SEGMENT_MIN_AVG_RATIO = 0.45;
+const AUTO_SCROLL_SEGMENT_MAX_AVG_RATIO = 2.2;
 function clamp(v, a, b) {
 	return Math.max(a, Math.min(b, v));
 }
@@ -179,11 +191,8 @@ function docBounds(el) {
 	return { t: r.top + window.scrollY, b: r.bottom + window.scrollY };
 }
 function sheetLines(el) {
-	return [...el.querySelectorAll('p.line')].filter((node) =>
-		node instanceof HTMLParagraphElement
-		&& node.classList.length === 1
-		&& node.classList.contains('line')
-	);
+	if (!(el instanceof Element)) return [];
+	return [...el.querySelectorAll('p.line:not(.blank)')].filter((node) => node instanceof HTMLParagraphElement);
 }
 function storageKeyPage() {
 	return STORAGE_NS + ':' + window.location.pathname;
@@ -629,71 +638,181 @@ function restoreState() {
 	}
 }
 
-const VAR_WEIGHT_FLOOR = 0.12;
-
-// 歌詞文字数カウントで除外する記号類
+// 歌詞文字数カウントで除外する記号類（chordwiki-personal song-autoscroll.js と同様）
 const LYRIC_SYMBOL_RE = /[\s\u0000-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u00BF\u30FB\u30FC\u2010-\u2027\u2030-\u205E\u2060-\u206F\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65]/g;
 
-function lyricLenFromEl(el) {
-	if (!(el instanceof Element)) return 0;
-	// chord span を除いたテキストのみ集計（参考実装と同方式）
-	let total = 0;
-	el.querySelectorAll('span:not(.chord)').forEach((node) => {
-		total += String(node.textContent || '').replace(LYRIC_SYMBOL_RE, '').length;
-	});
-	// span 構造がない場合（fallback）
-	if (total === 0) {
-		total = String(el.innerText || '').replace(LYRIC_SYMBOL_RE, '').length;
+function getLineLyricLength(lineEl) {
+	if (!(lineEl instanceof Element) || !lineEl.matches('p.line:not(.blank)')) {
+		return 0;
 	}
-	return total;
+
+	let totalLength = 0;
+	lineEl.querySelectorAll('span:not(.chord)').forEach((node) => {
+		totalLength += String(node.textContent || '').replace(LYRIC_SYMBOL_RE, '').length;
+	});
+
+	if (totalLength === 0) {
+		totalLength = String(lineEl.innerText || '').replace(LYRIC_SYMBOL_RE, '').length;
+	}
+
+	return totalLength;
 }
 
-function normalizeVarWeights(rawWeights) {
-	if (!rawWeights.length) return [];
-	const min = Math.min(...rawWeights);
-	const max = Math.max(...rawWeights);
-	if (!Number.isFinite(min) || !Number.isFinite(max) || Math.abs(max - min) < 0.0001) {
-		return rawWeights.map(() => Math.max(VAR_WEIGHT_FLOOR, 1));
+function getLineChordCount(lineEl) {
+	if (!(lineEl instanceof Element)) {
+		return 0;
 	}
-	return rawWeights.map((v) => {
-		const n = clamp((v - min) / (max - min), 0, 1);
-		return VAR_WEIGHT_FLOOR + n * (1 - VAR_WEIGHT_FLOOR);
+
+	return lineEl.querySelectorAll('span.chord').length;
+}
+
+function getLineBarHintCount(lineEl) {
+	if (!(lineEl instanceof Element)) {
+		return 0;
+	}
+
+	const barMatches = String(lineEl.innerText || '').match(/\|/g);
+	return clamp((barMatches || []).length, 0, 8);
+}
+
+function normalizeWeights(rawWeights, { floor = AUTO_SCROLL_WEIGHT_FLOOR } = {}) {
+	if (!Array.isArray(rawWeights) || rawWeights.length === 0) {
+		return [];
+	}
+
+	const safeFloor = clamp(Number(floor) || 0, 0, 0.9);
+	const minValue = Math.min(...rawWeights);
+	const maxValue = Math.max(...rawWeights);
+
+	if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || Math.abs(maxValue - minValue) < 0.0001) {
+		return rawWeights.map(() => Math.max(safeFloor, 1));
+	}
+
+	return rawWeights.map((value) => {
+		const normalized = clamp((value - minValue) / (maxValue - minValue), 0, 1);
+		return safeFloor + (normalized * (1 - safeFloor));
 	});
 }
 
-/** @returns {null | {cumMs:number[], ytab:number[]}} */
+function clampAndNormalizeSegmentDurations(rawDurations, totalDurationMs) {
+	if (!Array.isArray(rawDurations) || rawDurations.length === 0) {
+		return [];
+	}
+
+	const safeTotal = Math.max(0.0001, Number(totalDurationMs) || 0);
+	const count = rawDurations.length;
+	const avgDuration = safeTotal / Math.max(1, count);
+	const minDuration = Math.max(0.0001, avgDuration * AUTO_SCROLL_SEGMENT_MIN_AVG_RATIO);
+	const maxDuration = Math.max(minDuration, avgDuration * AUTO_SCROLL_SEGMENT_MAX_AVG_RATIO);
+	const clampedDurations = rawDurations.map((duration) => {
+		const safeDuration = Math.max(0.0001, Number(duration) || 0);
+		return clamp(safeDuration, minDuration, maxDuration);
+	});
+
+	const clampedSum = clampedDurations.reduce((sum, value) => sum + value, 0);
+	if (!Number.isFinite(clampedSum) || clampedSum <= 0.0001) {
+		return rawDurations.map(() => safeTotal / count);
+	}
+
+	const normalizedDurations = clampedDurations.map((duration) => (duration / clampedSum) * safeTotal);
+	const normalizedSum = normalizedDurations.reduce((sum, value) => sum + value, 0);
+	if (!normalizedDurations.length) {
+		return [];
+	}
+
+	normalizedDurations[normalizedDurations.length - 1] = Math.max(
+		0.0001,
+		normalizedDurations[normalizedDurations.length - 1] + (safeTotal - normalizedSum)
+	);
+
+	return normalizedDurations;
+}
+
+/**
+ * chordwiki-personal buildAutoScrollTimeline と同等のウェイト・セグメント処理で cumMs を構築する。
+ * @returns {null | {cumMs:number[], ytab:number[], entries:object[]}}
+ */
 function buildVarCurve() {
 	const sh = getSheetEl();
+	if (!(sh instanceof Element) || !Number.isFinite(SC.sx) || !Number.isFinite(SC.ex)) {
+		return null;
+	}
+
 	const entries = [];
-	for (const el of sheetLines(sh)) {
-		const r = el.getBoundingClientRect();
-		const centerY = (r.top + r.bottom) / 2 + window.scrollY;
-		if (centerY < SC.sx - 14 || centerY > SC.ex + 14) continue;
+	for (const lineEl of sheetLines(sh)) {
+		const rect = lineEl.getBoundingClientRect();
+		const topY = rect.top + window.scrollY;
+		const bottomY = rect.bottom + window.scrollY;
+		const centerY = (topY + bottomY) / 2;
+
+		if (bottomY < SC.sx - 14 || topY > SC.ex + 14) {
+			continue;
+		}
+
 		entries.push({
+			el: lineEl,
+			topY,
+			bottomY,
+			centerY,
 			y: centerY,
-			topY: r.top + window.scrollY,
-			bottomY: r.bottom + window.scrollY,
-			el: el,
-			lz: lyricLenFromEl(el),
-			h: 0, // unused
+			heightPx: Math.max(1, rect.height),
+			lyricLength: getLineLyricLength(lineEl),
+			chordCount: getLineChordCount(lineEl),
+			barHintCount: getLineBarHintCount(lineEl)
 		});
 	}
-	if (entries.length < 2) return null;
 
-	// 各エントリのウェイト計算（歌詞文字数のみ）
-	const lyricRaw = entries.map((e) => e.lz);
-	const finalWeights = normalizeVarWeights(lyricRaw);
+	if (entries.length < 2) {
+		return null;
+	}
 
-	// セグメント間のウェイトでタイムライン構築（参考実装と同方式）
-	const segWeights = finalWeights.slice(0, -1);
-	const sum = Math.max(1e-6, segWeights.reduce((a, b) => a + b, 0));
+	const lyricValues = entries.map((entry) => entry.lyricLength);
+	const chordValues = entries.map((entry) => entry.chordCount);
+	const heightValues = entries.map((entry) => entry.heightPx);
+	const barHintValues = entries.map((entry) => entry.barHintCount);
+	const lyricNormalized = normalizeWeights(lyricValues, { floor: 0 });
+	const chordNormalized = normalizeWeights(chordValues, { floor: 0 });
+	const heightNormalized = normalizeWeights(heightValues, { floor: 0 });
+	const barHintNormalized = normalizeWeights(barHintValues, { floor: 0 });
+
+	entries.forEach((entry, index) => {
+		let rawWeight =
+			(lyricNormalized[index] * AUTO_SCROLL_WEIGHT_LYRIC_RATIO)
+			+ (chordNormalized[index] * AUTO_SCROLL_WEIGHT_CHORD_RATIO)
+			+ (heightNormalized[index] * AUTO_SCROLL_WEIGHT_VISUAL_RATIO)
+			+ (barHintNormalized[index] * AUTO_SCROLL_WEIGHT_BAR_HINT_RATIO);
+
+		if (entry.lyricLength <= AUTO_SCROLL_PERFORMANCE_LINE_LYRIC_MAX
+			&& entry.chordCount >= AUTO_SCROLL_PERFORMANCE_LINE_CHORD_MIN) {
+			rawWeight = Math.max(rawWeight, AUTO_SCROLL_PERFORMANCE_LINE_MIN_WEIGHT);
+		}
+
+		entry.weight = rawWeight;
+	});
+
+	const finalizedWeights = normalizeWeights(entries.map((entry) => entry.weight), {
+		floor: AUTO_SCROLL_WEIGHT_FLOOR
+	});
+
+	entries.forEach((entry, index) => {
+		entry.weight = finalizedWeights[index];
+	});
+
+	const totalDurationMs = Math.max(1, SC.ms || 0);
+	const segmentWeights = entries.slice(0, -1).map((entry) => entry.weight);
+	const totalWeight = Math.max(0.0001, segmentWeights.reduce((sum, value) => sum + value, 0));
+	const rawDurations = segmentWeights.map((weight) => Math.max(0.0001, totalDurationMs * (weight / totalWeight)));
+	const segmentDurationsMs = clampAndNormalizeSegmentDurations(rawDurations, totalDurationMs);
+
 	const cumMs = [0];
-	const ytab = entries.map((e) => e.y);
 	let acc = 0;
-	for (let i = 0; i < segWeights.length; i++) {
-		acc += (segWeights[i] / sum) * SC.ms;
+	for (let i = 0; i < segmentDurationsMs.length; i += 1) {
+		acc += segmentDurationsMs[i];
 		cumMs.push(acc);
 	}
+
+	const ytab = entries.map((e) => e.y);
+
 	return { cumMs, ytab, entries };
 }
 
