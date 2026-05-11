@@ -10,7 +10,7 @@ Chordwiki-AutoScrollerは、[ChordWiki](https://ja.chordwiki.org/wiki/)の楽譜
 - 手動スクロール時は自動スクロールを一時停止し、即時同期
 - ホイール操作でスクロール速度を調整
 - ページ内に操作パネルを表示（速度調整・開始/停止）
-- 楽曲の再生時間を自動取得（MusicBrainz/itunes連携）
+- 楽曲の再生時間を自動取得（**iTunes** → **MusicBrainz** の順で参照）
 
 ## manifest.json（ローカルのみ）
 
