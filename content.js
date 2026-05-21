@@ -194,6 +194,23 @@ function sheetLines(el) {
 	if (!(el instanceof Element)) return [];
 	return [...el.querySelectorAll('p.line:not(.blank)')].filter((node) => node instanceof HTMLParagraphElement);
 }
+
+/** ja.chordwiki: p.line.comment / p.key を除く、歌詞またはコードがある最初の行 */
+function isScrollContentLine(lineEl) {
+	if (!(lineEl instanceof HTMLParagraphElement)) return false;
+	if (lineEl.matches('p.line.comment, p.comment, .comment')) return false;
+	if (!lineEl.matches('p.line:not(.blank)')) return false;
+	return getLineLyricLength(lineEl) > 0 || getLineChordCount(lineEl) > 0;
+}
+
+function findDefaultStartLineEl(sh) {
+	if (!(sh instanceof Element)) return null;
+	for (const el of sh.querySelectorAll('p.line:not(.blank)')) {
+		if (isScrollContentLine(el)) return el;
+	}
+	return null;
+}
+
 function storageKeyPage() {
 	return STORAGE_NS + ':' + window.location.pathname;
 }
@@ -538,9 +555,9 @@ function applyDefaults() {
 	const b = docBounds(sh);
 	SC.dsy = b.t;
 	SC.dey = b.b;
-	const topLines = sheetLines(sh);
-	if (topLines.length) {
-		const r0 = topLines[0].getBoundingClientRect();
+	const startLine = findDefaultStartLineEl(sh);
+	if (startLine instanceof HTMLParagraphElement) {
+		const r0 = startLine.getBoundingClientRect();
 		SC.dsy = Math.round(r0.top + window.scrollY - (r0.height * 1.0));
 	}
 	const chordPLines = [...sh.querySelectorAll('p.line')].filter((lineEl) =>
