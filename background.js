@@ -232,7 +232,15 @@ function handleGetDuration(message, sender, sendResponse) {
 // Content script registration (静的 manifest が効かない Chrome / Edge 向け)
 // -----------------------------------------------------------------------------
 
-async function ensureChordwikiContentScriptsRegistered() {
+/** onInstalled / onStartup / SW 起動が同時に走ると Duplicate script ID になるため単一フライト */
+let contentScriptRegistrationPromise = null;
+
+function isDuplicateScriptIdError(err) {
+	const msg = String(err?.message ?? err);
+	return /duplicate script id/i.test(msg);
+}
+
+async function registerChordwikiContentScriptsOnce() {
 	if (!chrome.scripting?.registerContentScripts) {
 		return;
 	}
@@ -247,23 +255,31 @@ async function ensureChordwikiContentScriptsRegistered() {
 	};
 
 	try {
-		const existing = await chrome.scripting.getRegisteredContentScripts({
+		await chrome.scripting.unregisterContentScripts({
 			ids: [REGISTERED_CONTENT_SCRIPT_ID],
 		});
-		if (existing.length > 0) {
-			await chrome.scripting.updateRegisteredContentScripts({
-				ids: [REGISTERED_CONTENT_SCRIPT_ID],
-				matches: scriptDef.matches,
-				js: scriptDef.js,
-				css: scriptDef.css,
-				runAt: scriptDef.runAt,
-			});
-		} else {
-			await chrome.scripting.registerContentScripts([scriptDef]);
-		}
+	} catch {
+		// 未登録
+	}
+
+	try {
+		await chrome.scripting.registerContentScripts([scriptDef]);
 	} catch (err) {
+		if (isDuplicateScriptIdError(err)) {
+			// 並行登録やリロード直後は既に登録済み
+			return;
+		}
 		console.warn('[CW-AS] registerContentScripts failed:', err);
 	}
+}
+
+function ensureChordwikiContentScriptsRegistered() {
+	if (!contentScriptRegistrationPromise) {
+		contentScriptRegistrationPromise = registerChordwikiContentScriptsOnce().finally(() => {
+			contentScriptRegistrationPromise = null;
+		});
+	}
+	return contentScriptRegistrationPromise;
 }
 
 /** 登録済み CS が無い環境向け: ページ読み込み後に 1 回だけ注入を試みる */
