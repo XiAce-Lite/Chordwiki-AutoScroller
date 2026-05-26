@@ -1719,18 +1719,29 @@ function scrollBackToStartByClick() {
 	setStatus('先頭へ戻りました。もう一度クリックで開始します。', 'warn');
 }
 
-function handlePrimarySheetClick(ev) {
-	if (!SC.extensionEnabled) return;
-	if (ev.defaultPrevented || ev.button !== 0) return;
-	if (!(ev.target instanceof Element)) return;
+function shouldHandleSheetPointer(ev) {
+	if (!SC.extensionEnabled) return false;
+	if (ev.button !== 0) return false;
+	if (!(ev.target instanceof Element)) return false;
 
+	const sheet = getSheetEl();
+	if (!(sheet instanceof Element) || !sheet.contains(ev.target)) {
+		return false;
+	}
 	if (ev.target.closest('#cw-autoscroll-root, #cw-autoscroll-marker-layer, #cw-autoscroll-focus-overlay')) {
-		return;
+		return false;
 	}
-	if (ev.target.closest('a, button, input, select, textarea')) {
-		return;
+	if (ev.target.closest('button, input, select, textarea')) {
+		return false;
 	}
+	return true;
+}
 
+/** 楽譜エリアのクリック／タップ（開始ボタンとは別経路・リスナーは1つのみ） */
+function handlePrimarySheetPointer(ev) {
+	if (!shouldHandleSheetPointer(ev)) {
+		return;
+	}
 	if (SC.drag) {
 		return;
 	}
@@ -2141,10 +2152,8 @@ function mountUi() {
 	}, { passive: true });
 	window.addEventListener('resize', onResizeLayout);
 	SC.sheetEl = getSheetEl();
-	if (SC.sheetEl) {
-		SC.sheetEl.addEventListener('click', handlePrimarySheetClick);
-	}
-	document.addEventListener('click', handlePrimarySheetClick, true);
+	// click は document 捕捉と二重になるため pointerup のみ（1 回の操作で togglePlay が 2 回走るのを防ぐ）
+	document.addEventListener('pointerup', handlePrimarySheetPointer, true);
 
 	window.addEventListener(
 		'wheel',
