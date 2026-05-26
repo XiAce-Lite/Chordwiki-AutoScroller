@@ -1,8 +1,8 @@
 'use strict';
 
-/** manifest 静的注入 + registerContentScripts + executeScript フォールバックの二重実行防止 */
+/** 二重注入防止（registerContentScripts + executeScript フォールバック） */
 if (globalThis.__CW_AS_CONTENT_INITIALIZED__) {
-	// 2 回目以降は何もしない（top-level return は content script で有効）
+	// 2 回目以降は実行しない
 } else {
 globalThis.__CW_AS_CONTENT_INITIALIZED__ = true;
 

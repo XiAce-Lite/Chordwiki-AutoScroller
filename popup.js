@@ -12,6 +12,37 @@ function setToggleUi(btn, state) {
 	btn.textContent = '拡張機能: OFF（クリックでON）';
 }
 
+function updatePageLinkStatus() {
+	const statusEl = document.getElementById('cw-page-status');
+	if (!statusEl) return;
+
+	chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+		const tab = tabs[0];
+		chrome.runtime.sendMessage(
+			{
+				type: 'ensureContentScript',
+				tabId: tab?.id,
+				url: tab?.url,
+			},
+			(resp) => {
+				if (chrome.runtime.lastError) {
+					statusEl.textContent = 'ページ未接続（拡張の再読み込みを試してください）';
+					statusEl.dataset.tone = 'error';
+					return;
+				}
+				if (resp?.alive) {
+					statusEl.textContent = '';
+					statusEl.dataset.tone = 'ok';
+					return;
+				}
+				statusEl.textContent =
+					'ページ未接続（ChordWikiの曲ページを開き、再読み込みしてください）';
+				statusEl.dataset.tone = 'error';
+			}
+		);
+	});
+}
+
 function refreshToggleState(btn) {
 	chrome.runtime.sendMessage({ type: 'getExtensionEnabled' }, (resp) => {
 		if (chrome.runtime.lastError || !resp || resp.ok !== true) {
@@ -37,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	if (!(btn instanceof HTMLButtonElement)) return;
 
 	refreshToggleState(btn);
+	updatePageLinkStatus();
 
 	btn.addEventListener('click', () => {
 		btn.disabled = true;
@@ -48,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			}
 			setToggleUi(btn, resp.enabled ? 'on' : 'off');
 			btn.disabled = false;
+			updatePageLinkStatus();
 		});
 	});
 });

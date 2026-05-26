@@ -42,10 +42,21 @@
 		opacity: 0.6;
 		cursor: not-allowed;
 	}
+	.cw-page-status {
+		margin: 8px 0 0;
+		font-size: 12px;
+		line-height: 1.45;
+		color: #607080;
+		min-height: 1.2em;
+	}
+	.cw-page-status[data-tone="error"] {
+		color: #b42318;
+	}
 </style>
 </head>
 <body>
 <button id="toggle" type="button" data-state="off">読み込み中...</button>
+<p id="cw-page-status" class="cw-page-status" aria-live="polite"></p>
 <hr>
 <h1>AutoScroller ヘルプ</h1>
 

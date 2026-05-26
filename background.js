@@ -282,17 +282,21 @@ function ensureChordwikiContentScriptsRegistered() {
 	return contentScriptRegistrationPromise;
 }
 
-/** 登録済み CS が無い環境向け: ページ読み込み後に 1 回だけ注入を試みる */
-async function tryFallbackInjectTab(tabId, url) {
-	if (!chrome.scripting?.executeScript || tabId == null || !isChordwikiUrl(url)) {
-		return;
-	}
-
+async function isContentScriptAlive(tabId) {
 	try {
 		await chrome.tabs.sendMessage(tabId, { type: 'getExtensionEnabled' });
-		return;
+		return true;
 	} catch {
-		// content script 未接続
+		return false;
+	}
+}
+
+async function tryInjectContentScripts(tabId, url) {
+	if (!chrome.scripting?.executeScript) {
+		return { ok: false, reason: 'no_scripting_api' };
+	}
+	if (tabId == null || !isChordwikiUrl(url)) {
+		return { ok: false, reason: 'not_chordwiki' };
 	}
 
 	try {
@@ -304,9 +308,53 @@ async function tryFallbackInjectTab(tabId, url) {
 			target: { tabId },
 			files: ['styles.css'],
 		});
+		return { ok: true, reason: 'injected' };
 	} catch (err) {
-		console.warn('[CW-AS] fallback inject failed:', err);
+		const reason = String(err?.message ?? err);
+		console.warn('[CW-AS] inject failed tabId=%s url=%s err=%s', tabId, url, reason);
+		return { ok: false, reason };
 	}
+}
+
+/** ページ読み込み後: 未接続なら注入 */
+async function tryFallbackInjectTab(tabId, url) {
+	if (tabId == null || !isChordwikiUrl(url)) {
+		return;
+	}
+	if (await isContentScriptAlive(tabId)) {
+		return;
+	}
+	await tryInjectContentScripts(tabId, url);
+}
+
+/** ポップアップ表示時（activeTab）: 接続を確認し、必要なら強制注入 */
+async function handleEnsureContentScript(message) {
+	await ensureChordwikiContentScriptsRegistered();
+
+	let tabId = message.tabId;
+	let url = message.url;
+	if (tabId == null || !url) {
+		const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+		const tab = tabs[0];
+		tabId = tab?.id;
+		url = tab?.url;
+	}
+
+	if (tabId == null || !isChordwikiUrl(url)) {
+		return { ok: false, alive: false, reason: 'not_chordwiki_tab' };
+	}
+
+	if (await isContentScriptAlive(tabId)) {
+		return { ok: true, alive: true, reason: 'already_alive' };
+	}
+
+	const injectResult = await tryInjectContentScripts(tabId, url);
+	const alive = injectResult.ok && (await isContentScriptAlive(tabId));
+	return {
+		ok: true,
+		alive,
+		reason: alive ? 'injected' : injectResult.reason || 'inject_failed',
+	};
 }
 
 function onExtensionLifecycle() {
@@ -522,6 +570,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 		case 'toggleUiVisibility':
 			toggleUiOnActiveSongTab().then(() => sendResponse({ ok: true }));
+			return true;
+
+		case 'ensureContentScript':
+			handleEnsureContentScript(message)
+				.then((result) => sendResponse(result))
+				.catch((err) => {
+					sendResponse({
+						ok: false,
+						alive: false,
+						reason: String(err?.message ?? err),
+					});
+				});
 			return true;
 
 		default:
