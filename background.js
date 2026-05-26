@@ -7,6 +7,8 @@ const STORAGE_OPTIONS_KEY = 'cw_autoscroller_options';
 const STORAGE_SESSION_SPEED_KEY = 'cw_autoscroller_session_speed';
 const STORAGE_EXTENSION_ENABLED_KEY = 'cw_autoscroller_enabled';
 const CHORDWIKI_HOSTNAME = 'ja.chordwiki.org';
+/** 動的 content script 登録 ID（静的 manifest と併用時は content.js 側で二重実行を防止） */
+const REGISTERED_CONTENT_SCRIPT_ID = 'cw-as-chordwiki';
 
 const DEFAULT_OPTIONS = {
 	debugQueryOutput: false,
@@ -225,6 +227,90 @@ function handleGetDuration(message, sender, sendResponse) {
 			});
 		});
 }
+
+// -----------------------------------------------------------------------------
+// Content script registration (静的 manifest が効かない Chrome / Edge 向け)
+// -----------------------------------------------------------------------------
+
+async function ensureChordwikiContentScriptsRegistered() {
+	if (!chrome.scripting?.registerContentScripts) {
+		return;
+	}
+
+	const scriptDef = {
+		id: REGISTERED_CONTENT_SCRIPT_ID,
+		matches: ['https://ja.chordwiki.org/*'],
+		js: ['content.js'],
+		css: ['styles.css'],
+		runAt: 'document_idle',
+		persistAcrossSessions: true,
+	};
+
+	try {
+		const existing = await chrome.scripting.getRegisteredContentScripts({
+			ids: [REGISTERED_CONTENT_SCRIPT_ID],
+		});
+		if (existing.length > 0) {
+			await chrome.scripting.updateRegisteredContentScripts({
+				ids: [REGISTERED_CONTENT_SCRIPT_ID],
+				matches: scriptDef.matches,
+				js: scriptDef.js,
+				css: scriptDef.css,
+				runAt: scriptDef.runAt,
+			});
+		} else {
+			await chrome.scripting.registerContentScripts([scriptDef]);
+		}
+	} catch (err) {
+		console.warn('[CW-AS] registerContentScripts failed:', err);
+	}
+}
+
+/** 登録済み CS が無い環境向け: ページ読み込み後に 1 回だけ注入を試みる */
+async function tryFallbackInjectTab(tabId, url) {
+	if (!chrome.scripting?.executeScript || tabId == null || !isChordwikiUrl(url)) {
+		return;
+	}
+
+	try {
+		await chrome.tabs.sendMessage(tabId, { type: 'getExtensionEnabled' });
+		return;
+	} catch {
+		// content script 未接続
+	}
+
+	try {
+		await chrome.scripting.executeScript({
+			target: { tabId },
+			files: ['content.js'],
+		});
+		await chrome.scripting.insertCSS({
+			target: { tabId },
+			files: ['styles.css'],
+		});
+	} catch (err) {
+		console.warn('[CW-AS] fallback inject failed:', err);
+	}
+}
+
+function onExtensionLifecycle() {
+	ensureChordwikiContentScriptsRegistered().catch(() => {});
+}
+
+chrome.runtime.onInstalled.addListener(onExtensionLifecycle);
+chrome.runtime.onStartup.addListener(onExtensionLifecycle);
+onExtensionLifecycle();
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+	if (changeInfo.status !== 'complete' || tabId == null) {
+		return;
+	}
+	const url = tab.url;
+	if (!url || !isChordwikiUrl(url)) {
+		return;
+	}
+	void tryFallbackInjectTab(tabId, url);
+});
 
 // -----------------------------------------------------------------------------
 // Relay to active chordwiki tab (popup → background → content)

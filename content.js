@@ -1,5 +1,11 @@
 'use strict';
 
+/** manifest 静的注入 + registerContentScripts + executeScript フォールバックの二重実行防止 */
+if (globalThis.__CW_AS_CONTENT_INITIALIZED__) {
+	// 2 回目以降は何もしない（top-level return は content script で有効）
+} else {
+globalThis.__CW_AS_CONTENT_INITIALIZED__ = true;
+
 const DEFAULT_DURATION_MS = 240000;
 const STORAGE_NS = 'cw_as_v10';
 const STORAGE_UI_VISIBLE_KEY = 'cw_ui_visible';
@@ -2319,3 +2325,5 @@ if (document.readyState === 'loading') {
 } else {
 	init();
 }
+
+} // __CW_AS_CONTENT_INITIALIZED__
