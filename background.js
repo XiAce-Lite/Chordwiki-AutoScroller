@@ -269,7 +269,6 @@ async function registerChordwikiContentScriptsOnce() {
 			// 並行登録やリロード直後は既に登録済み
 			return;
 		}
-		console.warn('[CW-AS] registerContentScripts failed:', err);
 	}
 }
 
@@ -328,9 +327,7 @@ async function tryInjectContentScripts(tabId, url) {
 		});
 		return { ok: true, reason: 'injected' };
 	} catch (err) {
-		const reason = String(err?.message ?? err);
-		console.warn('[CW-AS] inject failed tabId=%s url=%s err=%s', tabId, url, reason);
-		return { ok: false, reason };
+		return { ok: false, reason: String(err?.message ?? err) };
 	}
 }
 

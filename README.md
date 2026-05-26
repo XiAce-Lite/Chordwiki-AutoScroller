@@ -2,7 +2,9 @@
 
 ## 概要
 
-Chordwiki-AutoScrollerは、[ChordWiki](https://ja.chordwiki.org/wiki/)の楽譜ページで自動スクロール機能を提供するChrome拡張です。手動スクロールやホイール操作と自動スクロールの両立、スムーズな再生体験を実現します。
+Chordwiki-AutoScrollerは、[ChordWiki](https://ja.chordwiki.org/wiki/)の楽譜ページで自動スクロール機能を提供する Chrome 拡張です。手動スクロールやホイール操作と自動スクロールの両立、スムーズな再生体験を実現します。
+
+**対応ブラウザ:** **Google Chrome を推奨**します。Microsoft Edge（Chrome ウェブストア経由のインストール）ではページ側の機能が動作しない場合があります（未保証）。
 
 ## 主な機能
 
@@ -39,6 +41,12 @@ node scripts/sync-manifest-example.js
 2. ChordWikiの楽譜ページを開くと自動でパネルが表示されます
 3. パネルで自動スクロールの開始/停止や速度調整が可能
 4. 手動でスクロールした場合は自動スクロールが一時停止し、260ms後に再開
+
+## バージョン番号（ストア公開）
+
+- Chrome ウェブストアの公開版は **`1.0.8` → 次回 `1.0.9`** のように、**ユーザー向けは必要最小限の patch 番号だけ上げる**運用を推奨します。
+- 開発中にローカルだけ `1.0.10` … と進めても、ストア提出時は **`manifest.json` の `version` を公開版に合わせてまとめる**（今回の互換修正はすべて `1.0.9` に集約）。
+- 変更内容は [CHANGELOG.md](./CHANGELOG.md) に記載します。
 
 ## 注意事項
 

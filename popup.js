@@ -12,39 +12,18 @@ function setToggleUi(btn, state) {
 	btn.textContent = '拡張機能: OFF（クリックでON）';
 }
 
-function updatePageLinkStatus() {
-	const statusEl = document.getElementById('cw-page-status');
-	if (!statusEl) return;
-
+/** ポップアップ表示時に ChordWiki タブへ content script を接続（activeTab） */
+function ensurePageConnection() {
 	chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
 		const tab = tabs[0];
+		if (tab?.id == null) return;
 		chrome.runtime.sendMessage(
 			{
 				type: 'ensureContentScript',
-				tabId: tab?.id,
-				url: tab?.url,
+				tabId: tab.id,
+				url: tab.url,
 			},
-			(resp) => {
-				if (chrome.runtime.lastError) {
-					statusEl.textContent = 'ページ未接続（拡張の再読み込みを試してください）';
-					statusEl.dataset.tone = 'error';
-					return;
-				}
-				if (!resp?.alive) {
-					statusEl.textContent =
-						'ページ未接続（ChordWikiの曲ページを開き、再読み込みしてください）';
-					statusEl.dataset.tone = 'error';
-					return;
-				}
-				if (resp.contentEnabled === false) {
-					statusEl.textContent =
-						'ページ側がOFFです。下のボタンでONにしてください';
-					statusEl.dataset.tone = 'error';
-					return;
-				}
-				statusEl.textContent = '';
-				statusEl.dataset.tone = 'ok';
-			}
+			() => void chrome.runtime.lastError
 		);
 	});
 }
@@ -73,8 +52,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	const btn = document.getElementById('toggle');
 	if (!(btn instanceof HTMLButtonElement)) return;
 
+	ensurePageConnection();
 	refreshToggleState(btn);
-	updatePageLinkStatus();
 
 	btn.addEventListener('click', () => {
 		btn.disabled = true;
@@ -86,7 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			}
 			setToggleUi(btn, resp.enabled ? 'on' : 'off');
 			btn.disabled = false;
-			updatePageLinkStatus();
+			ensurePageConnection();
 		});
 	});
 });
