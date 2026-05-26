@@ -290,10 +290,14 @@ const metroState = {
 
 function loadUiVisibleState() {
 	try {
-		return localStorage.getItem(STORAGE_UI_VISIBLE_KEY) === '1';
+		const v = localStorage.getItem(STORAGE_UI_VISIBLE_KEY);
+		if (v === null) {
+			return true;
+		}
+		return v === '1';
 	} catch (e) {
 		void e;
-		return false;
+		return true;
 	}
 }
 
@@ -1720,7 +1724,10 @@ function handlePrimarySheetClick(ev) {
 	if (ev.defaultPrevented || ev.button !== 0) return;
 	if (!(ev.target instanceof Element)) return;
 
-	if (ev.target.closest('#cw-autoscroll-root, #cw-autoscroll-marker-layer, a, button, input, select, textarea, label')) {
+	if (ev.target.closest('#cw-autoscroll-root, #cw-autoscroll-marker-layer, #cw-autoscroll-focus-overlay')) {
+		return;
+	}
+	if (ev.target.closest('a, button, input, select, textarea')) {
 		return;
 	}
 
@@ -2137,6 +2144,7 @@ function mountUi() {
 	if (SC.sheetEl) {
 		SC.sheetEl.addEventListener('click', handlePrimarySheetClick);
 	}
+	document.addEventListener('click', handlePrimarySheetClick, true);
 
 	window.addEventListener(
 		'wheel',
@@ -2319,6 +2327,14 @@ function init() {
 		}
 	});
 }
+
+chrome.storage.onChanged.addListener((changes, area) => {
+	if (area !== 'sync' || !changes[STORAGE_EXTENSION_ENABLED_KEY]) {
+		return;
+	}
+	const enabled = changes[STORAGE_EXTENSION_ENABLED_KEY].newValue !== false;
+	applyExtensionEnabledState(enabled, { silent: true });
+});
 
 if (document.readyState === 'loading') {
 	document.addEventListener('DOMContentLoaded', init);

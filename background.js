@@ -282,13 +282,31 @@ function ensureChordwikiContentScriptsRegistered() {
 	return contentScriptRegistrationPromise;
 }
 
-async function isContentScriptAlive(tabId) {
+async function queryContentScriptState(tabId) {
 	try {
-		await chrome.tabs.sendMessage(tabId, { type: 'getExtensionEnabled' });
-		return true;
+		const resp = await chrome.tabs.sendMessage(tabId, { type: 'getExtensionEnabled' });
+		return {
+			alive: true,
+			contentEnabled: resp?.enabled !== false,
+		};
 	} catch {
-		return false;
+		return { alive: false, contentEnabled: false };
 	}
+}
+
+async function isContentScriptAlive(tabId) {
+	const state = await queryContentScriptState(tabId);
+	return state.alive;
+}
+
+async function syncExtensionEnabledToTab(tabId) {
+	const enabled = await getExtensionEnabled();
+	try {
+		await chrome.tabs.sendMessage(tabId, { type: 'setExtensionEnabled', enabled });
+	} catch {
+		// ignore
+	}
+	return enabled;
 }
 
 async function tryInjectContentScripts(tabId, url) {
@@ -344,16 +362,33 @@ async function handleEnsureContentScript(message) {
 		return { ok: false, alive: false, reason: 'not_chordwiki_tab' };
 	}
 
-	if (await isContentScriptAlive(tabId)) {
-		return { ok: true, alive: true, reason: 'already_alive' };
+	const initial = await queryContentScriptState(tabId);
+	if (initial.alive) {
+		const enabled = await syncExtensionEnabledToTab(tabId);
+		return {
+			ok: true,
+			alive: true,
+			contentEnabled: enabled,
+			reason: 'already_alive',
+		};
 	}
 
 	const injectResult = await tryInjectContentScripts(tabId, url);
-	const alive = injectResult.ok && (await isContentScriptAlive(tabId));
+	const after = await queryContentScriptState(tabId);
+	if (after.alive) {
+		const enabled = await syncExtensionEnabledToTab(tabId);
+		return {
+			ok: true,
+			alive: true,
+			contentEnabled: enabled,
+			reason: 'injected',
+		};
+	}
 	return {
 		ok: true,
-		alive,
-		reason: alive ? 'injected' : injectResult.reason || 'inject_failed',
+		alive: false,
+		contentEnabled: false,
+		reason: injectResult.reason || 'inject_failed',
 	};
 }
 

@@ -30,14 +30,20 @@ function updatePageLinkStatus() {
 					statusEl.dataset.tone = 'error';
 					return;
 				}
-				if (resp?.alive) {
-					statusEl.textContent = '';
-					statusEl.dataset.tone = 'ok';
+				if (!resp?.alive) {
+					statusEl.textContent =
+						'ページ未接続（ChordWikiの曲ページを開き、再読み込みしてください）';
+					statusEl.dataset.tone = 'error';
 					return;
 				}
-				statusEl.textContent =
-					'ページ未接続（ChordWikiの曲ページを開き、再読み込みしてください）';
-				statusEl.dataset.tone = 'error';
+				if (resp.contentEnabled === false) {
+					statusEl.textContent =
+						'ページ側がOFFです。下のボタンでONにしてください';
+					statusEl.dataset.tone = 'error';
+					return;
+				}
+				statusEl.textContent = '';
+				statusEl.dataset.tone = 'ok';
 			}
 		);
 	});
