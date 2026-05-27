@@ -28,7 +28,8 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://ja.chordwiki.org/*",
+    "https://ja.chordwiki.org/wiki/*",
+    "https://ja.chordwiki.org/wiki.cgi?c=view*",
     "https://musicbrainz.org/*",
     "https://itunes.apple.com/*"
   ]

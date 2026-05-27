@@ -1731,7 +1731,7 @@ function shouldHandleSheetPointer(ev) {
 	if (ev.target.closest('#cw-autoscroll-root, #cw-autoscroll-marker-layer, #cw-autoscroll-focus-overlay')) {
 		return false;
 	}
-	if (ev.target.closest('button, input, select, textarea')) {
+	if (ev.target.closest('a, button, input, select, textarea')) {
 		return false;
 	}
 	return true;

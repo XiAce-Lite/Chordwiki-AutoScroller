@@ -9,6 +9,10 @@ const STORAGE_EXTENSION_ENABLED_KEY = 'cw_autoscroller_enabled';
 const CHORDWIKI_HOSTNAME = 'ja.chordwiki.org';
 /** 動的 content script 登録 ID（静的 manifest と併用時は content.js 側で二重実行を防止） */
 const REGISTERED_CONTENT_SCRIPT_ID = 'cw-as-chordwiki';
+const CHORDWIKI_SCRIPT_MATCHES = [
+	'https://ja.chordwiki.org/wiki/*',
+	'https://ja.chordwiki.org/wiki.cgi?c=view*',
+];
 
 const DEFAULT_OPTIONS = {
 	debugQueryOutput: false,
@@ -240,6 +244,28 @@ function isDuplicateScriptIdError(err) {
 	return /duplicate script id/i.test(msg);
 }
 
+function isChordwikiInjectTargetUrl(url) {
+	if (!url || typeof url !== 'string') {
+		return false;
+	}
+
+	try {
+		const u = new URL(url);
+		if (u.hostname !== CHORDWIKI_HOSTNAME) {
+			return false;
+		}
+		if (u.pathname.startsWith('/wiki/')) {
+			return true;
+		}
+		if (u.pathname === '/wiki.cgi' && /^[?]c=view(?:$|&)/.test(u.search)) {
+			return true;
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
 async function registerChordwikiContentScriptsOnce() {
 	if (!chrome.scripting?.registerContentScripts) {
 		return;
@@ -247,7 +273,7 @@ async function registerChordwikiContentScriptsOnce() {
 
 	const scriptDef = {
 		id: REGISTERED_CONTENT_SCRIPT_ID,
-		matches: ['https://ja.chordwiki.org/*'],
+		matches: CHORDWIKI_SCRIPT_MATCHES,
 		js: ['content.js'],
 		css: ['styles.css'],
 		runAt: 'document_idle',
@@ -312,7 +338,7 @@ async function tryInjectContentScripts(tabId, url) {
 	if (!chrome.scripting?.executeScript) {
 		return { ok: false, reason: 'no_scripting_api' };
 	}
-	if (tabId == null || !isChordwikiUrl(url)) {
+	if (tabId == null || !isChordwikiInjectTargetUrl(url)) {
 		return { ok: false, reason: 'not_chordwiki' };
 	}
 
@@ -333,7 +359,7 @@ async function tryInjectContentScripts(tabId, url) {
 
 /** ページ読み込み後: 未接続なら注入 */
 async function tryFallbackInjectTab(tabId, url) {
-	if (tabId == null || !isChordwikiUrl(url)) {
+	if (tabId == null || !isChordwikiInjectTargetUrl(url)) {
 		return;
 	}
 	if (await isContentScriptAlive(tabId)) {
@@ -355,7 +381,7 @@ async function handleEnsureContentScript(message) {
 		url = tab?.url;
 	}
 
-	if (tabId == null || !isChordwikiUrl(url)) {
+	if (tabId == null || !isChordwikiInjectTargetUrl(url)) {
 		return { ok: false, alive: false, reason: 'not_chordwiki_tab' };
 	}
 
@@ -402,7 +428,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 		return;
 	}
 	const url = tab.url;
-	if (!url || !isChordwikiUrl(url)) {
+	if (!url || !isChordwikiInjectTargetUrl(url)) {
 		return;
 	}
 	void tryFallbackInjectTab(tabId, url);
@@ -425,22 +451,19 @@ function isChordwikiUrl(url) {
 }
 
 function isChordwikiSongPageUrl(url) {
-	if (!isChordwikiUrl(url)) {
+	if (!isChordwikiInjectTargetUrl(url)) {
 		return false;
 	}
 
 	try {
 		const u = new URL(url);
-		if (!u.pathname.startsWith('/wiki/')) {
-			return false;
+		if (u.pathname.startsWith('/wiki/')) {
+			return true;
 		}
-		if (u.pathname === '/' || u.pathname === '') {
-			return false;
+		if (u.pathname === '/wiki.cgi' && /^[?]c=view(?:$|&)/.test(u.search)) {
+			return true;
 		}
-		if (u.pathname.startsWith('/ranking') || u.pathname.startsWith('/search')) {
-			return false;
-		}
-		return true;
+		return false;
 	} catch {
 		return false;
 	}
@@ -449,7 +472,7 @@ function isChordwikiSongPageUrl(url) {
 async function getActiveChordwikiTabId() {
 	const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
 	const tab = tabs[0];
-	if (tab?.id != null && isChordwikiUrl(tab.url)) {
+	if (tab?.id != null && isChordwikiInjectTargetUrl(tab.url)) {
 		return tab.id;
 	}
 	return null;
@@ -522,7 +545,7 @@ async function toggleUiOnActiveSongTab() {
 async function broadcastExtensionEnabled(enabled) {
 	const tabs = await chrome.tabs.query({});
 	for (const tab of tabs) {
-		if (tab?.id == null || !isChordwikiUrl(tab.url)) {
+		if (tab?.id == null || !isChordwikiInjectTargetUrl(tab.url)) {
 			continue;
 		}
 		try {

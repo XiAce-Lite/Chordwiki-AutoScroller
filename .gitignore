@@ -1,2 +1,6 @@
 manifest.json
+
+dist/
+release/
+
 .cursor/
