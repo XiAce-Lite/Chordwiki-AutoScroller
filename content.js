@@ -37,6 +37,11 @@ const METRO_BEATS_MIN = 2;
 const METRO_BEATS_MAX = 6;
 const METRO_ACCENT_RATIO = 0.24;
 const STORAGE_METRO_BEATS_KEY = `${STORAGE_NS}:metro_beats`;
+const AUTOSCROLLER_UI_EXCLUDE_SELECTOR =
+	'#cw-autoscroll-root, #cw-autoscroll-marker-layer, #cw-autoscroll-focus-overlay';
+const INLINE_VIDEO_EXCLUDE_SELECTOR =
+	'#rc-inline-youtube-shell, #rc-inline-youtube-iframe, .rc-inline-youtube-header, .rc-inline-youtube-title, .rc-inline-youtube-actions';
+const FORM_CONTROL_EXCLUDE_SELECTOR = 'a, button, input, select, textarea';
 
 /** chordwiki-personal song-core.js と同等の可変スクロールウェイト（A 仕様） */
 const AUTO_SCROLL_WEIGHT_FLOOR = 0.22;
@@ -1728,10 +1733,15 @@ function shouldHandleSheetPointer(ev) {
 	if (!(sheet instanceof Element) || !sheet.contains(ev.target)) {
 		return false;
 	}
-	if (ev.target.closest('#cw-autoscroll-root, #cw-autoscroll-marker-layer, #cw-autoscroll-focus-overlay')) {
+	if (ev.target.closest(AUTOSCROLLER_UI_EXCLUDE_SELECTOR)) {
 		return false;
 	}
-	if (ev.target.closest('a, button, input, select, textarea')) {
+	// Chordwiki-Ex のインライン再生枠（YouTube/ニコニコ共通シェル）は
+	// タイトルやヘッダー領域のクリックを AutoScroller 側で拾わない。
+	if (ev.target.closest(INLINE_VIDEO_EXCLUDE_SELECTOR)) {
+		return false;
+	}
+	if (ev.target.closest(FORM_CONTROL_EXCLUDE_SELECTOR)) {
 		return false;
 	}
 	return true;
