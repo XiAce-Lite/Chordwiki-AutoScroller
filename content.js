@@ -42,6 +42,8 @@ const AUTOSCROLLER_UI_EXCLUDE_SELECTOR =
 const INLINE_VIDEO_EXCLUDE_SELECTOR =
 	'#rc-inline-youtube-shell, #rc-inline-youtube-iframe, .rc-inline-youtube-header, .rc-inline-youtube-title, .rc-inline-youtube-actions';
 const FORM_CONTROL_EXCLUDE_SELECTOR = 'a, button, input, select, textarea';
+const RC_LAYOUT_READY_EVENT = 'rc-chordwiki-ex-ready';
+const EX_LAYOUT_WAIT_FALLBACK_MS = 2500;
 
 /** chordwiki-personal song-core.js と同等の可変スクロールウェイト（A 仕様） */
 const AUTO_SCROLL_WEIGHT_FLOOR = 0.22;
@@ -2178,6 +2180,41 @@ function mountUi() {
 	);
 }
 
+function flushLayoutAfterPaint(callback) {
+	requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
+function waitForChordwikiExLayout(callback) {
+	let ran = false;
+	const invoke = () => {
+		if (ran) return;
+		ran = true;
+		flushLayoutAfterPaint(callback);
+	};
+
+	const rcLayout = globalThis.RCLayout;
+	if (rcLayout?.whenReady) {
+		rcLayout.whenReady(invoke);
+		setTimeout(invoke, EX_LAYOUT_WAIT_FALLBACK_MS);
+		return;
+	}
+	setTimeout(invoke, 300);
+}
+
+let exLayoutReadyListenerWired = false;
+
+function wireExLayoutReadyListener() {
+	if (exLayoutReadyListenerWired) return;
+	exLayoutReadyListenerWired = true;
+	document.addEventListener(RC_LAYOUT_READY_EVENT, () => {
+		flushLayoutAfterPaint(() => {
+			if (SC.uiRoot) {
+				onResizeLayout();
+			}
+		});
+	});
+}
+
 function bootstrapMarkersAndUi() {
 	applyDefaults();
 	const ok = restoreState();
@@ -2332,18 +2369,21 @@ function init() {
 		return;
 	}
 
-	bootstrapMarkersAndUi();
-	const t = extractSongTitle();
-	const a = extractSongArtist();
-	SC.queryTitle = String(t || '');
-	SC.queryArtist = String(a || '');
-	updateQueryPairDisplay();
-	chrome.storage.sync.get(STORAGE_EXTENSION_ENABLED_KEY, (data) => {
-		const enabled = data?.[STORAGE_EXTENSION_ENABLED_KEY] !== false;
-		applyExtensionEnabledState(enabled, { silent: true });
-		if (enabled && t && a) {
-			fetchRemoteDuration(t, a);
-		}
+	wireExLayoutReadyListener();
+	waitForChordwikiExLayout(() => {
+		bootstrapMarkersAndUi();
+		const t = extractSongTitle();
+		const a = extractSongArtist();
+		SC.queryTitle = String(t || '');
+		SC.queryArtist = String(a || '');
+		updateQueryPairDisplay();
+		chrome.storage.sync.get(STORAGE_EXTENSION_ENABLED_KEY, (data) => {
+			const enabled = data?.[STORAGE_EXTENSION_ENABLED_KEY] !== false;
+			applyExtensionEnabledState(enabled, { silent: true });
+			if (enabled && t && a) {
+				fetchRemoteDuration(t, a);
+			}
+		});
 	});
 }
 
