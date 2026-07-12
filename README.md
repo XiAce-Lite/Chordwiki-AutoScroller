@@ -1,10 +1,10 @@
-# Chordwiki-AutoScroller
+# Chordwiki-AutoScroller（Chrome / Firefox 拡張）
 
 ## 概要
 
-Chordwiki-AutoScrollerは、[ChordWiki](https://ja.chordwiki.org/wiki/)の楽譜ページで自動スクロール機能を提供する Chrome 拡張です。手動スクロールやホイール操作と自動スクロールの両立、スムーズな再生体験を実現します。
+Chordwiki-AutoScrollerは、[ChordWiki](https://ja.chordwiki.org/wiki/)の楽譜ページで自動スクロール機能を提供するブラウザ拡張です。手動スクロールやホイール操作と自動スクロールの両立、スムーズな再生体験を実現します。
 
-**対応ブラウザ:** **Google Chrome を推奨**します。Microsoft Edge（Chrome ウェブストア経由のインストール）ではページ側の機能が動作しない場合があります（未保証）。
+**対応ブラウザ:** **Google Chrome** と **Firefox**。Microsoft Edge（Chrome ウェブストア経由のインストール）ではページ側の機能が動作しない場合があります（未保証）。
 
 ## 主な機能
 
@@ -35,9 +35,39 @@ node scripts/sync-manifest-example.js
 
 バージョン番号の**唯一のソースは `manifest.json` の `version`**です。ポップアップ表示と MusicBrainz 向け User-Agent は実行時に `chrome.runtime.getManifest().version` を参照するため、`background.js` / `popup.html` に固定で書いておく必要はありません。
 
+## Chrome 提出用 ZIP
+
+```powershell
+.\package-extension.ps1
+# または
+.\package-extension.ps1 -Target chrome
+```
+
+`dist\Chordwiki-AutoScroller-<version>.zip` が作成されます。ローカルの **`manifest.json`（本物）** が ZIP に入ります。
+
+## Firefox（AMO）提出用 ZIP
+
+```powershell
+.\package-extension.ps1 -Target firefox
+```
+
+- Zip: `dist\Chordwiki-AutoScroller-<version>-firefox.zip`
+- 一時読込用フォルダ: `dist\firefox-unpacked\`（`about:debugging` →「一時的なアドオンを読み込む」でこの中の `manifest.json` を選択）
+
+Firefox 用マニフェストは **`manifest.firefox.json`**（`browser_specific_settings.gecko.id` 付き）。バージョンは `manifest.json` と pre-commit / `version-sync` で同期されます。
+
+楽曲時間の取得で iTunes / MusicBrainz に検索語を送るため、Firefox マニフェストでは `data_collection_permissions.required` に `searchTerms` を宣言しています。
+
+### Firefox での動作確認
+
+1. `.\package-extension.ps1 -Target firefox`
+2. Firefox で `about:debugging#/runtime/this-firefox`
+3. 「一時的なアドオンを読み込む」→ `dist\firefox-unpacked\manifest.json`
+4. ChordWiki の曲ページで確認
+
 ## 使い方
 
-1. Chrome拡張としてインストール
+1. Chrome / Firefox 拡張としてインストール
 2. ChordWikiの楽譜ページを開くと自動でパネルが表示されます
 3. パネルで自動スクロールの開始/停止や速度調整が可能
 4. 手動でスクロールした場合は自動スクロールが一時停止し、260ms後に再開

@@ -49,6 +49,9 @@ function main() {
 
 	execSync('node scripts/version-sync.js bump', { stdio: 'inherit' });
 	execSync('git add manifest.example.json', { stdio: 'inherit' });
+	if (fs.existsSync('manifest.firefox.json')) {
+		execSync('git add manifest.firefox.json', { stdio: 'inherit' });
+	}
 	execSync('node scripts/version-sync.js check', { stdio: 'inherit' });
 }
 

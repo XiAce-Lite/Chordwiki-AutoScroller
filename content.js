@@ -386,7 +386,7 @@ function resolveBpmForCurrentStartMarker() {
 function buildMetroDots(count) {
 	if (!(metroState.dotsEl instanceof Element)) return;
 	const beats = clampMetroBeats(count);
-	metroState.dotsEl.innerHTML = '';
+	metroState.dotsEl.replaceChildren();
 	for (let i = 0; i < beats; i += 1) {
 		const dot = document.createElement('span');
 		dot.className = 'cw-metro-dot';
@@ -1801,82 +1801,247 @@ function wireMarkerLayer(layer) {
 	}
 }
 
+/** AMO 向け: HTML 文字列ではなく DOM API で要素を組み立てる。 */
+function cwEl(tag, props, children) {
+	const node = document.createElement(tag);
+	if (props) {
+		for (const [key, value] of Object.entries(props)) {
+			if (value == null || value === false) continue;
+			if (key === 'className') {
+				node.className = value;
+			} else if (key === 'text') {
+				node.textContent = value;
+			} else if (key === 'dataset' && typeof value === 'object') {
+				for (const [dk, dv] of Object.entries(value)) {
+					node.dataset[dk] = String(dv);
+				}
+			} else if (key === 'style' && typeof value === 'object') {
+				Object.assign(node.style, value);
+			} else if (
+				key === 'checked' ||
+				key === 'disabled' ||
+				key === 'selected' ||
+				key === 'hidden' ||
+				key === 'value' ||
+				key === 'type' ||
+				key === 'id' ||
+				key === 'min' ||
+				key === 'max' ||
+				key === 'step' ||
+				key === 'htmlFor'
+			) {
+				node[key] = value;
+			} else {
+				node.setAttribute(key, value === true ? '' : String(value));
+			}
+		}
+	}
+	if (children) {
+		for (const child of children) {
+			if (child == null) continue;
+			node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+		}
+	}
+	return node;
+}
+
+function createMarkerButton(kind, label) {
+	return cwEl(
+		'button',
+		{
+			type: 'button',
+			className: `cw-marker cw-marker-${kind}`,
+			dataset: { cwMarker: kind },
+			'aria-label': label,
+		},
+		[cwEl('span', { className: 'cw-marker-pin' }), cwEl('span', { className: 'cw-marker-label', text: label })]
+	);
+}
+
+function createPresetButton(minutes, seconds) {
+	const label = `${minutes}:${String(seconds).padStart(2, '0')}`;
+	return cwEl(
+		'button',
+		{
+			type: 'button',
+			className: 'cw-preset',
+			dataset: { m: String(minutes), s: String(seconds) },
+			text: label,
+		}
+	);
+}
+
+function buildAutoscrollUiRoot() {
+	const beatOptions = [2, 3, 4, 5, 6].map((n) =>
+		cwEl('option', { value: String(n), selected: n === 4, text: String(n) })
+	);
+
+	const head = cwEl('div', { className: 'cw-autoscroll-head' }, [
+		cwEl('div', { className: 'cw-autoscroll-head-main' }, [
+			cwEl('div', { className: 'cw-autoscroll-title', text: 'Song Controls' }),
+			cwEl('div', {
+				id: 'cw-status',
+				className: 'cw-autoscroll-status',
+				dataset: { tone: 'info' },
+				text: '停止中',
+			}),
+			cwEl(
+				'div',
+				{
+					id: 'cw-metro-row',
+					className: 'cw-metro-row is-disabled',
+					'aria-label': 'Visual metronome',
+				},
+				[
+					cwEl('label', { className: 'cw-metro-beats-wrap', htmlFor: 'cw-metro-beats' }, [
+						cwEl('span', { className: 'cw-metro-label', text: '拍子' }),
+						cwEl(
+							'select',
+							{
+								id: 'cw-metro-beats',
+								className: 'cw-metro-beats-select',
+								disabled: true,
+							},
+							beatOptions
+						),
+					]),
+					cwEl('div', { id: 'cw-metro-dots', className: 'cw-metro-dots', 'aria-hidden': 'true' }),
+					cwEl('button', {
+						id: 'cw-metro-toggle',
+						type: 'button',
+						className: 'cw-metro-toggle',
+						disabled: true,
+						text: '停止',
+					}),
+				]
+			),
+		]),
+		cwEl('button', {
+			type: 'button',
+			id: 'cw-collapse',
+			className: 'cw-collapse-btn',
+			'aria-expanded': 'true',
+			text: '≫',
+		}),
+	]);
+
+	const body = cwEl('div', { className: 'cw-autoscroll-body' }, [
+		cwEl('div', { className: 'cw-section-title', text: 'オートスクロール' }),
+		cwEl('div', { className: 'cw-duration-row' }, [
+			cwEl('input', {
+				id: 'cw-min',
+				type: 'number',
+				min: '0',
+				max: '99',
+				step: '1',
+				value: '4',
+				inputmode: 'numeric',
+			}),
+			cwEl('span', { className: 'cw-colon', text: ':' }),
+			cwEl('input', {
+				id: 'cw-sec',
+				type: 'number',
+				min: '0',
+				step: '1',
+				value: '0',
+				inputmode: 'numeric',
+			}),
+			cwEl('button', {
+				type: 'button',
+				id: 'cw-reset-time',
+				className: 'cw-inline-reset',
+				text: '↺ Time',
+			}),
+		]),
+		cwEl('div', { className: 'cw-presets' }, [
+			createPresetButton(3, 0),
+			createPresetButton(3, 30),
+			createPresetButton(4, 0),
+			createPresetButton(4, 30),
+			createPresetButton(5, 0),
+		]),
+		cwEl('div', { className: 'cw-speed-row' }, [
+			cwEl('button', { type: 'button', id: 'cw-spd-down', text: '－' }),
+			cwEl('span', {
+				id: 'cw-spd-lbl',
+				className: 'cw-speed-lbl',
+				dataset: { speedState: 'normal' },
+				text: '1.00x',
+			}),
+			cwEl('button', { type: 'button', id: 'cw-spd-up', text: '＋' }),
+			cwEl('button', {
+				type: 'button',
+				id: 'cw-spd-reset',
+				className: 'cw-inline-reset',
+				text: '↺ Speed',
+			}),
+		]),
+		cwEl('div', {
+			className: 'cw-speed-hint',
+			text: '再生中のホイール操作でスピードを変更します',
+		}),
+		cwEl('div', { className: 'cw-actions' }, [
+			cwEl('button', { type: 'button', id: 'cw-play', text: '開始' }),
+			cwEl('button', { type: 'button', id: 'cw-reset-markers', text: '↺ Marker' }),
+			cwEl('div', { className: 'cw-toggle-stack' }, [
+				cwEl('label', { className: 'cw-var-toggle' }, [
+					cwEl('input', { type: 'checkbox', id: 'cw-variable' }),
+					cwEl('span', { text: '可変スクロール' }),
+				]),
+				cwEl('label', { className: 'cw-hl-toggle' }, [
+					cwEl('input', { type: 'checkbox', id: 'cw-highlight', checked: true }),
+					cwEl('span', { text: 'ハイライト表示' }),
+				]),
+				cwEl('label', { className: 'cw-ctx-lines-label' }, [
+					cwEl('span', { text: '前後' }),
+					cwEl('input', {
+						type: 'number',
+						id: 'cw-ctx-lines',
+						min: '2',
+						max: '6',
+						step: '1',
+						value: '4',
+						inputmode: 'numeric',
+						style: { width: '3em' },
+					}),
+					cwEl('span', { text: '行' }),
+				]),
+			]),
+		]),
+		cwEl('div', { className: 'cw-est-row' }, [
+			'推定時間 ',
+			cwEl('span', { id: 'cw-est-dur', text: '--:--' }),
+			' ',
+			cwEl('span', { id: 'cw-src', className: 'cw-src' }),
+			' ',
+			cwEl('span', { id: 'cw-query-pair', className: 'cw-query-pair', text: ':' }),
+		]),
+		cwEl('div', { className: 'cw-remain-row' }, [
+			'残り時間 ',
+			cwEl('span', { id: 'cw-remain', text: '--:--' }),
+		]),
+		cwEl('div', { id: 'cw-debug-url', className: 'cw-debug-url', hidden: true }),
+		cwEl('div', {
+			className: 'cw-est-note',
+			text: 'スライダーはページ・ポップアップ共通で速度を変更します',
+		}),
+	]);
+
+	return cwEl('div', { id: 'cw-autoscroll-root', className: 'cw-autoscroll-ui' }, [head, body]);
+}
+
 function mountUi() {
 	if (document.getElementById('cw-autoscroll-root')) return;
 	const focusOverlay = document.createElement('div');
 	focusOverlay.id = 'cw-autoscroll-focus-overlay';
 	focusOverlay.className = 'cw-focus-overlay';
 
-	const layer = document.createElement('div');
-	layer.id = 'cw-autoscroll-marker-layer';
-	layer.className = 'cw-marker-layer';
-	layer.innerHTML =
-		'<button type="button" class="cw-marker cw-marker-start" data-cw-marker="start" aria-label="Start">' +
-		'<span class="cw-marker-pin"></span><span class="cw-marker-label">Start</span></button>' +
-		'<button type="button" class="cw-marker cw-marker-end" data-cw-marker="end" aria-label="End">' +
-		'<span class="cw-marker-pin"></span><span class="cw-marker-label">End</span></button>';
+	const layer = cwEl('div', { id: 'cw-autoscroll-marker-layer', className: 'cw-marker-layer' }, [
+		createMarkerButton('start', 'Start'),
+		createMarkerButton('end', 'End'),
+	]);
 
-	const root = document.createElement('div');
-	root.id = 'cw-autoscroll-root';
-	root.className = 'cw-autoscroll-ui';
-	root.innerHTML =
-		'<div class="cw-autoscroll-head">' +
-		'<div class="cw-autoscroll-head-main">' +
-		'<div class="cw-autoscroll-title">Song Controls</div>' +
-		'<div id="cw-status" class="cw-autoscroll-status" data-tone="info">停止中</div>' +
-		'<div id="cw-metro-row" class="cw-metro-row is-disabled" aria-label="Visual metronome">' +
-		'<label for="cw-metro-beats" class="cw-metro-beats-wrap">' +
-		'<span class="cw-metro-label">拍子</span>' +
-		'<select id="cw-metro-beats" class="cw-metro-beats-select" disabled>' +
-		'<option value="2">2</option>' +
-		'<option value="3">3</option>' +
-		'<option value="4" selected>4</option>' +
-		'<option value="5">5</option>' +
-		'<option value="6">6</option>' +
-		'</select>' +
-		'</label>' +
-		'<div id="cw-metro-dots" class="cw-metro-dots" aria-hidden="true"></div>' +
-		'<button id="cw-metro-toggle" type="button" class="cw-metro-toggle" disabled>停止</button>' +
-		'</div>' +
-		'</div>' +
-		'<button type="button" id="cw-collapse" class="cw-collapse-btn" aria-expanded="true">≫</button>' +
-		'</div>' +
-		'<div class="cw-autoscroll-body">' +
-		'<div class="cw-section-title">オートスクロール</div>' +
-		'<div class="cw-duration-row">' +
-		'<input id="cw-min" type="number" min="0" max="99" step="1" value="4" inputmode="numeric" />' +
-		'<span class="cw-colon">:</span>' +
-		'<input id="cw-sec" type="number" min="0" step="1" value="0" inputmode="numeric" />' +
-		'<button type="button" id="cw-reset-time" class="cw-inline-reset">↺ Time</button>' +
-		'</div>' +
-		'<div class="cw-presets">' +
-		'<button type="button" class="cw-preset" data-m="3" data-s="0">3:00</button>' +
-		'<button type="button" class="cw-preset" data-m="3" data-s="30">3:30</button>' +
-		'<button type="button" class="cw-preset" data-m="4" data-s="0">4:00</button>' +
-		'<button type="button" class="cw-preset" data-m="4" data-s="30">4:30</button>' +
-		'<button type="button" class="cw-preset" data-m="5" data-s="0">5:00</button>' +
-		'</div>' +
-		'<div class="cw-speed-row">' +
-		'<button type="button" id="cw-spd-down">－</button>' +
-		'<span id="cw-spd-lbl" class="cw-speed-lbl" data-speed-state="normal">1.00x</span>' +
-		'<button type="button" id="cw-spd-up">＋</button>' +
-		'<button type="button" id="cw-spd-reset" class="cw-inline-reset">↺ Speed</button>' +
-		'</div>' +
-		'<div class="cw-speed-hint">再生中のホイール操作でスピードを変更します</div>' +
-		'<div class="cw-actions">' +
-		'<button type="button" id="cw-play">開始</button>' +
-		'<button type="button" id="cw-reset-markers">↺ Marker</button>' +
-		'<div class="cw-toggle-stack">' +
-		'<label class="cw-var-toggle"><input type="checkbox" id="cw-variable" /><span>可変スクロール</span></label>' +
-		'<label class="cw-hl-toggle"><input type="checkbox" id="cw-highlight" checked /><span>ハイライト表示</span></label>' +
-		'<label class="cw-ctx-lines-label"><span>前後</span><input type="number" id="cw-ctx-lines" min="2" max="6" step="1" value="4" inputmode="numeric" style="width:3em" /><span>行</span></label>' +
-		'</div>' +
-		'</div>' +
-		'<div class="cw-est-row">推定時間 <span id="cw-est-dur">--:--</span> <span id="cw-src" class="cw-src"></span> <span id="cw-query-pair" class="cw-query-pair">:</span></div>' +
-		'<div class="cw-remain-row">残り時間 <span id="cw-remain">--:--</span></div>' +
-		'<div id="cw-debug-url" class="cw-debug-url" hidden></div>' +
-		'<div class="cw-est-note">スライダーはページ・ポップアップ共通で速度を変更します</div>' +
-		'</div>';
+	const root = buildAutoscrollUiRoot();
 
 	document.body.appendChild(focusOverlay);
 	document.body.appendChild(layer);

@@ -18,8 +18,9 @@
   },
   "options_page": "options.html",
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "scripts": [
+      "background.js"
+    ]
   },
   "permissions": [
     "storage",
@@ -32,5 +33,19 @@
     "https://ja.chordwiki.org/wiki.cgi?c=view*",
     "https://musicbrainz.org/*",
     "https://itunes.apple.com/*"
-  ]
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "chordwiki-autoscroller@xiace-lite",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "searchTerms"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  }
 }
